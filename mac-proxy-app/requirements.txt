@@ -1,9 +1,0 @@
-# Proxy runtime (versions tested together; see ../Monarch API/requirements.txt)
-fastapi==0.162.0
-uvicorn==0.54.0
-monarchmoneycommunity==1.6.0
-certifi==2026.10.23
-# Menu-bar UI (macOS only; pulls in pyobjc-framework-Cocoa)
-rumps==0.4.0; sys_platform == "darwin"
-# Bundler
-pyinstaller==6.22.3

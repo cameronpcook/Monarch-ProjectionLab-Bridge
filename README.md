@@ -1,6 +1,10 @@
 # Monarch → ProjectionLab Bridge
 
-A Chrome extension that syncs account balances and budget data from [Monarch Money](https://monarchmoney.com) into [ProjectionLab](https://projectionlab.com) — keeping your financial projections current without manual entry.
+A Chrome and Safari extension that syncs account balances and budget data from [Monarch Money](https://monarchmoney.com) into [ProjectionLab](https://projectionlab.com), so your financial projections stay current without manual entry.
+
+The extension talks to Monarch **directly from your browser**. There's no server, proxy or account to sign up for.
+
+> Originally created by [Trey Corple](https://github.com/Treygec/Monarch-ProjectionLab-Bridge). This version removes the hosted service and the local proxy, and adds Safari support.
 
 <p align="center">
   <img src="docs/screenshots/sync%20preview.png" alt="Sync preview showing accounts and budgets ready to push" width="700" />
@@ -46,84 +50,30 @@ Before anything is written, review every value that will be pushed. Account item
 
 ---
 
-## Two Ways to Run
+## How it works
 
-Install the Chrome extension from [here](https://chromewebstore.google.com/detail/nocmpjoeohfhlkolmiomjcdnhmgmohop?utm_source=item-share-cb)
+- **Monarch:** you enter your Monarch email and password once. The extension signs in to Monarch's API (`api.monarch.com`) from your browser and saves the session, so you don't sign in again until it expires.
+- **ProjectionLab:** the extension writes through ProjectionLab's official Plugin API, using your Plugin API key, in an open ProjectionLab tab.
+- **Your data:** everything stays in your browser's extension storage. Nothing is sent anywhere except Monarch and ProjectionLab.
 
-Using Safari? See [`safari/README.md`](safari/README.md) to build the Safari version from the same source (requires a Mac with Xcode).
-
-### Option 1 — Self-Hosted (free, runs locally)
-
-Run a lightweight Python proxy on your own machine. Your Monarch credentials stay local and are sent only to Monarch's API — never to any third-party server.
-
-<p align="center">
-  <img src="docs/screenshots/setup-selfhosted-loaded.png" alt="Self-hosted setup with accounts and budgets loaded" width="700" />
-</p>
-
-### Option 2 — Hosted (no setup required)
-
-Sign in with a Monarch Bridge account and let the hosted service handle Monarch data fetching for you. No local server, no Docker, no Python — just install the extension and go.
-
-<p align="center">
-  <img src="docs/screenshots/Hosted%20version%20loaded.png" alt="Hosted setup with account signed in" width="700" />
-</p>
+> **Heads-up:** Monarch has no official public API, and its [Terms of Use](https://www.monarch.com/terms) prohibit accessing the service "programmatically by macro or other automated means." Read them and decide for yourself before using this. Monarch could change its API and break the extension at any time.
 
 ---
 
-## Self-Hosted Setup
+## Install
 
-### Mac app (easiest — no Docker)
+### Chrome (or any Chromium browser: Edge, Brave, Vivaldi, Arc)
 
-Download **Monarch Bridge Proxy** from this repo's [Releases](https://github.com/cameronpcook/Monarch-ProjectionLab-Bridge/releases) page, open it, and the proxy runs from your menu bar at `http://localhost:47821`. See [`mac-proxy-app/README.md`](mac-proxy-app/README.md) for step-by-step instructions, including the one-time "Open Anyway" approval macOS asks for.
+1. Download this repo: click the green **Code** button, then **Download ZIP**, and unzip it. Put the folder somewhere permanent, such as your home folder, not Downloads.
+2. Open `chrome://extensions` and turn on **Developer mode** (top right).
+3. Click **Load unpacked** and select the `monarch-extension` folder.
+4. Pin the extension to your toolbar.
 
-On Windows or Linux, or if you prefer Docker, use one of the options below.
+**Updating without losing your settings:** replace the files *inside the same folder* with the new version, then click the **↻ reload** icon on the extension's card in `chrome://extensions`. If you remove the extension or load it from a different folder, Chrome treats it as a new extension and your saved login, key and mappings start empty. To be safe, use **Settings → Backup & Restore → Export to File** before updating.
 
-### Prerequisites
+### Safari (Mac)
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (recommended), **or** Python 3.11+
-- Google Chrome (or any Chromium-based browser, I'm a BIG fan of Vivaldi if you're looking for unsolicited suggestions)
-
-### Docker (recommended)
-
-1. Clone this repo or download the `Monarch API/` folder.
-
-2. Start the proxy:
-   ```bash
-   cd "Monarch API"
-   docker compose up -d
-   ```
-   The API will be available at `http://localhost:47821`.
-
-3. Enter your Monarch credentials in the extension's **Setup** tab — they're sent from the extension to your local proxy via request headers. Nothing is stored on disk.
-
-### Manual (Python)
-
-1. Create and activate a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate   # Windows: venv\Scripts\activate
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r "Monarch API/requirements.txt"
-   ```
-
-3. Run the proxy:
-   ```bash
-   uvicorn monarch:app --host 127.0.0.1 --port 47821 --app-dir "Monarch API"
-   ```
-
-4. Enter your Monarch credentials in the extension's **Setup** tab — they're sent from the extension to your local proxy via request headers. Nothing is stored on disk.
-
----
-
-## Extension Installation
-
-1. Open Chrome and navigate to `chrome://extensions`
-2. Enable **Developer mode** (toggle in the top-right corner)
-3. Click **Load unpacked** and select the `monarch-extension/` folder
-4. Pin the extension to your toolbar for easy access
+Safari extensions have to be wrapped in a small Mac app, which you build once with Xcode. See [`safari/README.md`](safari/README.md).
 
 ---
 
@@ -131,51 +81,37 @@ On Windows or Linux, or if you prefer Docker, use one of the options below.
 
 ### 1 — Connect ProjectionLab
 
-Open the extension popup and go to the **Setup** tab. Click **Fetch from PL** while you have [ProjectionLab](https://app.projectionlab.com) open — this retrieves your Plugin API key and loads all your PL accounts and expenses.
+Open [ProjectionLab](https://app.projectionlab.com) in a tab. In the extension's **Setup** tab, paste your Plugin API key (ProjectionLab → Account Settings → Plugins) and click **Fetch from PL**.
 
 ### 2 — Connect Monarch
 
-**Self-hosted:** Enter your Monarch credentials and proxy URL, then click **Load from Monarch**.
-
-**Hosted:** Click the **Account** button in the header, sign in, then click **Load from Monarch**.
+Enter your Monarch email and password and click **Load from Monarch**. If you use two-factor authentication, enter the 6-digit code when asked. After that, the extension reuses your Monarch session until it expires.
 
 ### 3 — Map your accounts
 
-Go to **Mapping → Accounts**. Use **Auto-map by name** for a head start, then fine-tune. Accounts without a PL match can be created inline or bulk-created with **Create all unmapped**.
+Go to **Mapping → Accounts**. Use **Auto-map by name** for a head start, then fine-tune. Accounts without a PL match can be created inline or in bulk with **Create all unmapped**.
 
 ### 4 — Map your budgets
 
-Go to **Mapping → Budgets**. Connect each Monarch category to a PL plan expense, choose which plans to apply it to, and pick the expense frequency. Select **Actual** as the source to use real spending data instead of budgeted amounts.
+Go to **Mapping → Budgets**. Connect each Monarch category to a PL plan expense, choose which plans to apply it to, and pick the expense frequency. Select **Actual** as the source to use real spending instead of budgeted amounts.
 
 ### 5 — Set up merges (optional)
 
-Go to the **Merge** tab to combine multiple Monarch accounts or budget categories into single PL entries. Great for simplifying your projection model without losing granularity in Monarch.
+Use the **Merge** tab to combine multiple Monarch accounts or budget categories into single PL entries.
 
 ### 6 — Sync
 
-Go to the **Sync** tab, review the preview, and click **Push to ProjectionLab**. Done.
+Go to the **Sync** tab, review the preview, and click **Push to ProjectionLab**.
 
 ---
 
-## MFA / Two-Factor Authentication
+## Saved login and two-factor codes
 
-If your Monarch account uses TOTP-based two-factor authentication, you can provide the base32 secret key in **Settings → Monarch Authentication**. When enabled, the extension generates TOTP codes automatically — no manual entry of 6-digit codes on every session refresh.
+Your Monarch email, password, session and ProjectionLab key are saved in the extension's local storage, so you only enter them once.
 
----
+If your Monarch account uses an authenticator app, you can save its secret key in **Settings → Monarch Authentication**. The extension then generates the 6-digit codes itself whenever it needs to sign in again.
 
-## Hosted Version
-
-The hosted version eliminates the need for a local proxy. Sign up for a Monarch Bridge account, and the extension routes data through a secure backend:
-
-- Monarch credentials are sent directly to Monarch's API from your browser — never stored on our servers
-- Session tokens are stored for up to 10 minutes to complete MFA flows
-- An active subscription is required (manage billing from the Account dropdown)
-
----
-
-## Support Development
-
-If you're using the self-hosted version and find this extension useful, consider donating via the **Donate** button in the extension header.
+**Security note:** this storage isn't encrypted. Anyone with access to your computer account could read it. Only save your password and 2FA secret on a computer you trust. Backup files never include them.
 
 ---
 
@@ -185,4 +121,4 @@ Pull requests are welcome. Please open an issue first for significant changes.
 
 ## License
 
-MIT
+[MIT](LICENSE). Original work © Trey Corple.

@@ -1,9 +1,6 @@
 // ============================================================
-// Monarch → ProjectionLab Bridge  —  Popup v4
+// Monarch → ProjectionLab Bridge  —  Popup v5
 // ============================================================
-
-const FIREBASE_API_KEY        = 'AIzaSyBlQFWbPQ1bhREni8ZhfKbRsd3lKOPPO0s';
-const FIREBASE_FUNCTIONS_BASE = 'https://us-central1-monarch-bridge-prod.cloudfunctions.net';
 
 // ── State ────────────────────────────────────────────────────
 const S = {
@@ -22,13 +19,7 @@ const S = {
   monarchEmail:        '',
   monarchPassword:     '',
   monarchSessionToken: '',
-  monarchApiUrl:       'http://localhost:47821',
-  connectionMode:      'self-hosted',  // 'self-hosted' | 'hosted'
-  firebaseEmail:       '',
-  firebaseIdToken:     '',
-  firebaseRefreshToken:'',
-  firebaseTokenExpiry: 0,
-  settings:         { showHidden: false, writeNotes: true, monarchMfaEnabled: false, monarchMfaSecret: '', monarchDirect: false, budgetSource: { mode: 'planned', lookback: 3, aggregation: 'average' } },
+  settings:         { showHidden: false, writeNotes: true, monarchMfaEnabled: false, monarchMfaSecret: '', budgetSource: { mode: 'planned', lookback: 3, aggregation: 'average' } },
 };
 
 // ── PL investment type options ────────────────────────────────
@@ -176,58 +167,6 @@ function inferCategory(a) {
 }
 
 // ── Boot ─────────────────────────────────────────────────────
-// ── Permission helpers ───────────────────────────────────────
-function isLocalhostUrl(url) {
-  try {
-    const u = new URL(url);
-    return u.hostname === 'localhost' || u.hostname === '127.0.0.1';
-  } catch { return false; }
-}
-
-function originFromUrl(url) {
-  try { return new URL(url).origin + '/*'; } catch { return null; }
-}
-
-async function checkUrlPermission(url) {
-  if (!url || isLocalhostUrl(url)) return { needed: false, granted: true };
-  const origin = originFromUrl(url);
-  if (!origin) return { needed: true, granted: false };
-  const granted = await chrome.permissions.contains({ origins: [origin] });
-  return { needed: true, granted };
-}
-
-async function requestUrlPermission(url) {
-  const origin = originFromUrl(url);
-  if (!origin) return false;
-  return chrome.permissions.request({ origins: [origin] });
-}
-
-// Update permission status indicator in the Setup tab
-async function updatePermissionUI(url) {
-  const permStatus = byId('monarchPermStatus');
-  const grantBtn   = byId('grantPermissionBtn');
-  const fetchBtn   = byId('fetchMonarchAccounts');
-  if (!permStatus || !grantBtn) return;
-
-  const { needed, granted } = await checkUrlPermission(url);
-  if (!needed) {
-    permStatus.textContent = '';
-    permStatus.className = 'status-line';
-    grantBtn.style.display = 'none';
-    fetchBtn.disabled = false;
-  } else if (granted) {
-    permStatus.textContent = '✓ Permission granted for this URL';
-    permStatus.className = 'status-line ok';
-    grantBtn.style.display = 'none';
-    fetchBtn.disabled = false;
-  } else {
-    permStatus.textContent = '⚠ Permission required before fetching from this URL';
-    permStatus.className = 'status-line err';
-    grantBtn.style.display = '';
-    fetchBtn.disabled = true;
-  }
-}
-
 // Listen for warnings from the service worker
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'WARN_MULTI_TAB') {
@@ -256,8 +195,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ── Storage ──────────────────────────────────────────────────
 async function loadFromStorage() {
   const d = await msg('STORAGE_GET', {
-    keys: ['plApiKey','monarchEmail','monarchPassword','monarchSessionToken','monarchApiUrl',
-           'connectionMode','firebaseEmail','firebaseIdToken','firebaseRefreshToken','firebaseTokenExpiry',
+    keys: ['plApiKey','monarchEmail','monarchPassword','monarchSessionToken',
            'monarchAccounts','plAccounts',
            'mappings','pendingCreations','mergeGroups','settings',
            'monarchBudgets','plExpenses','budgetMappings','budgetMergeGroups',
@@ -267,12 +205,6 @@ async function loadFromStorage() {
   if (d.monarchEmail)           S.monarchEmail           = d.monarchEmail;
   if (d.monarchPassword)        S.monarchPassword        = d.monarchPassword;
   if (d.monarchSessionToken)    S.monarchSessionToken    = d.monarchSessionToken;
-  if (d.monarchApiUrl)          S.monarchApiUrl          = d.monarchApiUrl;
-  if (d.connectionMode)         S.connectionMode         = d.connectionMode;
-  if (d.firebaseEmail)          S.firebaseEmail          = d.firebaseEmail;
-  if (d.firebaseIdToken)        S.firebaseIdToken        = d.firebaseIdToken;
-  if (d.firebaseRefreshToken)   S.firebaseRefreshToken   = d.firebaseRefreshToken;
-  if (d.firebaseTokenExpiry)    S.firebaseTokenExpiry    = d.firebaseTokenExpiry;
   if (d.monarchAccounts)   S.monarchAccounts   = d.monarchAccounts;
   if (d.plAccounts)        S.plAccounts        = d.plAccounts;
   if (d.mappings)          S.mappings          = d.mappings;
@@ -289,16 +221,14 @@ async function loadFromStorage() {
   byId('plApiKey').value         = S.plApiKey;
   byId('monarchEmail').value     = S.monarchEmail;
   byId('monarchPassword').value  = S.monarchPassword;
-  byId('monarchApiUrl').value    = S.monarchApiUrl;
-  // Check permission status for the stored URL on load
-  if (S.monarchApiUrl) updatePermissionUI(S.monarchApiUrl);
-  applyConnectionModeUI();
+  if (S.monarchSessionToken) {
+    status('monarchFetchStatus', 'Signed in — click Load from Monarch to refresh data', 'ok');
+  }
 }
 
 async function save() {
   await msg('STORAGE_SET', { data: {
-    plApiKey: S.plApiKey, monarchEmail: S.monarchEmail, monarchPassword: S.monarchPassword, monarchSessionToken: S.monarchSessionToken, monarchApiUrl: S.monarchApiUrl,
-    connectionMode: S.connectionMode,
+    plApiKey: S.plApiKey, monarchEmail: S.monarchEmail, monarchPassword: S.monarchPassword, monarchSessionToken: S.monarchSessionToken,
     monarchAccounts: S.monarchAccounts, plAccounts: S.plAccounts,
     mappings: S.mappings, pendingCreations: S.pendingCreations,
     mergeGroups: S.mergeGroups, settings: S.settings,
@@ -308,63 +238,6 @@ async function save() {
     budgetSourceOverrides: S.budgetSourceOverrides,
     budgetGroupSourceOverrides: S.budgetGroupSourceOverrides,
   }});
-}
-
-// ── Connection mode UI ───────────────────────────────────────
-function applyConnectionModeUI() {
-  const hosted = S.connectionMode === 'hosted';
-  const direct = !hosted && !!S.settings.monarchDirect;
-  // Direct mode needs no proxy, so hide the proxy URL as in hosted mode
-  byId('monarchUrlSection').classList.toggle('hidden', hosted || direct);
-  const cbDirect = byId('settingDirectMode');
-  if (cbDirect) {
-    cbDirect.disabled = hosted;
-    byId('directModeRow').style.opacity = hosted ? '0.5' : '';
-  }
-
-  // Show donate chip for self-hosted, account chip for hosted
-  byId('donateChip').classList.toggle('hidden', hosted);
-  byId('accountChipWrap').classList.toggle('hidden', !hosted);
-
-  // Show/hide the inline banner on Setup tab
-  const banner = byId('firebaseAuthBanner');
-  banner.classList.toggle('hidden', !hosted);
-
-  const signedIn = hosted && !!S.firebaseEmail;
-
-  // Update header chip state
-  const chip = byId('accountChip');
-  const chipLabel = byId('accountChipLabel');
-  if (signedIn) {
-    chip.classList.add('signed-in');
-    chipLabel.textContent = S.firebaseEmail.split('@')[0];
-  } else {
-    chip.classList.remove('signed-in');
-    chipLabel.textContent = 'Account';
-  }
-
-  // Update dropdown panels
-  byId('accountDropdownSignedOut').classList.toggle('hidden', signedIn);
-  byId('accountDropdownSignedIn').classList.toggle('hidden', !signedIn);
-  if (signedIn) {
-    byId('acctDdCurrentEmail').textContent = S.firebaseEmail;
-    banner.classList.add('signed-in');
-    byId('firebaseAuthBannerText').innerHTML =
-      `Signed in as <strong>${esc(S.firebaseEmail)}</strong> — manage your account from the header.`;
-  } else {
-    banner.classList.remove('signed-in');
-    byId('firebaseAuthBannerText').innerHTML =
-      'Hosted mode — sign in to your Monarch Bridge account using the <strong>Account</strong> button in the header.';
-  }
-
-  // Update Monarch credentials hint based on mode
-  byId('monarchCredentialsHint').textContent = hosted
-    ? 'Enter your Monarch Money credentials. These are stored locally in your browser and sent directly to Monarch — never to our servers.'
-    : 'Enter your Monarch Money credentials. These are stored locally in your browser and sent only to your proxy — never to our servers.';
-
-  // Keep the hosted mode toggle in sync (may be called before setupSettings runs)
-  const cb = byId('settingHostedMode');
-  if (cb) cb.checked = hosted;
 }
 
 // ── Tab system ───────────────────────────────────────────────
@@ -487,7 +360,9 @@ function setupSetup() {
 
   // Monarch credentials
   byId('monarchEmail').addEventListener('change', async () => {
-    S.monarchEmail = byId('monarchEmail').value.trim();
+    const email = byId('monarchEmail').value.trim();
+    if (email !== S.monarchEmail) S.monarchSessionToken = '';
+    S.monarchEmail = email;
     await save();
   });
   byId('monarchPassword').addEventListener('change', async () => {
@@ -497,24 +372,6 @@ function setupSetup() {
   byId('toggleMonarchPassword').addEventListener('click', () => {
     const f = byId('monarchPassword');
     f.type = f.type === 'password' ? 'text' : 'password';
-  });
-
-  // Monarch API URL permission check
-  byId('monarchApiUrl').addEventListener('input', () => {
-    const url = byId('monarchApiUrl').value.trim();
-    if (url) updatePermissionUI(url);
-  });
-
-  byId('grantPermissionBtn').addEventListener('click', async () => {
-    const url = byId('monarchApiUrl').value.trim();
-    setLoading('grantPermissionBtn', true);
-    try {
-      const granted = await requestUrlPermission(url);
-      toast(granted ? 'Permission granted ✓' : 'Permission denied — cannot fetch from this URL', granted ? 'ok' : 'err');
-      await updatePermissionUI(url);
-    } catch (e) {
-      toast(e.message, 'err');
-    } finally { setLoading('grantPermissionBtn', false); }
   });
 
   // Shared: load accounts + budgets after session is established
@@ -564,46 +421,43 @@ function setupSetup() {
   }
 
   byId('fetchMonarchAccounts').addEventListener('click', async () => {
-    S.monarchApiUrl = (byId('monarchApiUrl').value.trim() || 'http://localhost:47821').replace(/\/accounts$/, '').replace(/\/$/, '');
-    const direct = S.connectionMode !== 'hosted' && !!S.settings.monarchDirect;
-    const { needed, granted } = direct ? { needed: false, granted: true } : await checkUrlPermission(S.monarchApiUrl);
-    if (needed && !granted) {
-      status('monarchFetchStatus', '✗ Permission not granted for this URL — click Grant Permission first', 'err');
-      return;
-    }
-    if (!S.monarchEmail || !S.monarchPassword) {
-      status('monarchFetchStatus', '✗ Enter your Monarch email and password above', 'err');
-      return;
-    }
     byId('mfaCodeRow').classList.add('hidden');
     setLoading('fetchMonarchAccounts', true);
     status('monarchFetchStatus', 'Connecting to Monarch…', 'loading');
     try {
-      // In hosted mode, skip login if we already have a session token
-      const hosted = S.connectionMode === 'hosted';
-      if (hosted && S.monarchSessionToken) {
+      // Reuse the saved Monarch session; only log in again once it has expired.
+      if (S.monarchSessionToken) {
         status('monarchFetchStatus', 'Loading data…', 'loading');
-      } else {
-        const auth = await msg('MONARCH_INITIATE_LOGIN');
-        if (auth?.error) throw new Error(auth.error);
-        if (auth.requires_mfa) {
-          status('monarchFetchStatus', 'Check your authenticator app and enter the 6-digit code below', 'pending');
-          byId('mfaCodeRow').classList.remove('hidden');
-          byId('monarchMfaCode').value = '';
-          byId('monarchMfaCode').focus();
+        try {
+          await loadMonarchData();
           return;
+        } catch (e) {
+          if (!e.message?.includes('TOKEN_EXPIRED')) throw e;
+          S.monarchSessionToken = '';
+          await save();
         }
-        S.monarchSessionToken = auth.token;
-        // In hosted mode, clear password from storage now that we have a session token
-        if (hosted) { S.monarchPassword = ''; await msg('STORAGE_SET', { data: { monarchPassword: '' } }); }
-        await save();
-        status('monarchFetchStatus', 'Authenticated — loading data…', 'loading');
       }
+      if (!S.monarchEmail || !S.monarchPassword) {
+        status('monarchFetchStatus', '✗ Enter your Monarch email and password above', 'err');
+        return;
+      }
+      const auth = await msg('MONARCH_INITIATE_LOGIN');
+      if (auth?.error) throw new Error(auth.error);
+      if (auth.requires_mfa) {
+        status('monarchFetchStatus', 'Check your authenticator app and enter the 6-digit code below', 'pending');
+        byId('mfaCodeRow').classList.remove('hidden');
+        byId('monarchMfaCode').value = '';
+        byId('monarchMfaCode').focus();
+        return;
+      }
+      S.monarchSessionToken = auth.token;
+      await save();
+      status('monarchFetchStatus', 'Signed in — loading data…', 'loading');
       await loadMonarchData();
     } catch (e) {
       const expired = e.message?.includes('TOKEN_EXPIRED');
       if (expired) { S.monarchSessionToken = ''; await save(); }
-      status('monarchFetchStatus', `✗ ${expired ? 'Session expired — re-authenticate' : e.message}`, 'err');
+      status('monarchFetchStatus', `✗ ${expired ? 'Session expired — click Load from Monarch to sign in again' : e.message}`, 'err');
       byId('monarchStatus').className = 'status-dot error';
     } finally { setLoading('fetchMonarchAccounts', false); }
   });
@@ -621,8 +475,6 @@ function setupSetup() {
       const result = await msg('MONARCH_COMPLETE_MFA', { code });
       if (result?.error) throw new Error(result.error);
       S.monarchSessionToken = result.token;
-      // In hosted mode, clear password from storage now that we have a session token
-      if (S.connectionMode === 'hosted') { S.monarchPassword = ''; await msg('STORAGE_SET', { data: { monarchPassword: '' } }); }
       await save();
       byId('mfaCodeRow').classList.add('hidden');
       status('mfaVerifyStatus', '', '');
@@ -633,85 +485,9 @@ function setupSetup() {
     } finally { setLoading('verifyMfaCode', false); }
   });
 
-  // ── Donate button (self-hosted mode) ────────────────────────
+  // ── Donate button ────────────────────────
   byId('donateChip').addEventListener('click', () => {
     window.open('https://buy.stripe.com/7sY28s6SXcM176D0JSfbq00', '_blank');
-  });
-
-  // ── Account dropdown (header) ──────────────────────────────
-  const _chipBtn = byId('accountChip');
-  const _dropdown = byId('accountDropdown');
-  _chipBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    _dropdown.classList.toggle('hidden');
-  });
-  _dropdown.addEventListener('click', (e) => {
-    e.stopPropagation(); // don't close when clicking inside dropdown
-  });
-  document.addEventListener('click', () => {
-    _dropdown.classList.add('hidden');
-  });
-
-  byId('acctDdTogglePw').addEventListener('click', () => {
-    const f = byId('acctDdPassword');
-    f.type = f.type === 'password' ? 'text' : 'password';
-  });
-
-  async function doFirebaseAuth(type) {
-    const email    = byId('acctDdEmail').value.trim();
-    const password = byId('acctDdPassword').value;
-    if (!email || !password) { status('acctDdStatus', '✗ Enter email and password', 'err'); return; }
-    const btnId = type === 'FIREBASE_SIGN_UP' ? 'acctDdSignUp' : 'acctDdSignIn';
-    setLoading(btnId, true);
-    status('acctDdStatus', type === 'FIREBASE_SIGN_UP' ? 'Creating account…' : 'Signing in…', 'loading');
-    try {
-      const result = await msg(type, { email, password });
-      if (result?.error) throw new Error(result.error);
-      S.firebaseEmail = result.email;
-      await save();
-      status('acctDdStatus', '', '');
-      applyConnectionModeUI();
-      document.dispatchEvent(new Event('firebase-auth-changed'));
-      toast(`Signed in as ${result.email}`, 'ok');
-    } catch (e) {
-      status('acctDdStatus', `✗ ${e.message}`, 'err');
-    } finally { setLoading(btnId, false); }
-  }
-
-  byId('acctDdSignIn').addEventListener('click', () => doFirebaseAuth('FIREBASE_SIGN_IN'));
-  byId('acctDdSignUp').addEventListener('click', () => doFirebaseAuth('FIREBASE_SIGN_UP'));
-
-  // Enter key to submit on email/password fields
-  byId('acctDdEmail').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); byId('acctDdSignIn').click(); }
-  });
-  byId('acctDdPassword').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); byId('acctDdSignIn').click(); }
-  });
-
-  byId('acctDdSignOut').addEventListener('click', async () => {
-    await msg('FIREBASE_SIGN_OUT');
-    S.firebaseEmail = '';
-    S.firebaseIdToken = '';
-    S.firebaseRefreshToken = '';
-    S.firebaseTokenExpiry = 0;
-    await save();
-    applyConnectionModeUI();
-    document.dispatchEvent(new Event('firebase-auth-changed'));
-    byId('acctDdEmail').value = '';
-    byId('acctDdPassword').value = '';
-    byId('acctDdCurrentEmail').textContent = '';
-    byId('accountDropdown').classList.add('hidden');
-    toast('Signed out', 'ok');
-  });
-
-  byId('acctDdBilling').addEventListener('click', async () => {
-    setLoading('acctDdBilling', true);
-    try {
-      await msg('FIREBASE_OPEN_BILLING');
-    } catch (e) {
-      toast(e.message, 'err');
-    } finally { setLoading('acctDdBilling', false); }
   });
 
   byId('debugExportBtn').addEventListener('click', async () => {
@@ -4093,39 +3869,6 @@ async function runSync() {
 
 // ── SETTINGS tab ─────────────────────────────────────────────
 function setupSettings() {
-  // Connection mode toggle
-  const cbHosted = byId('settingHostedMode');
-  cbHosted.checked = S.connectionMode === 'hosted';
-  cbHosted.addEventListener('change', async () => {
-    S.connectionMode = cbHosted.checked ? 'hosted' : 'self-hosted';
-    await save();
-    applyConnectionModeUI();
-    // Show/hide cloud backup section based on mode
-    const cs = byId('cloudBackupSection');
-    const vl = byId('cloudVersionList');
-    if (cbHosted.checked) {
-      cs.classList.remove('hidden');
-      refreshCloudVersions();
-    } else {
-      cs.classList.add('hidden');
-      vl.classList.add('hidden');
-      byId('cvNameBar').classList.add('hidden');
-    }
-    updateCloudSaveState();
-    toast(cbHosted.checked ? 'Switched to hosted service' : 'Switched to self-hosted proxy', 'ok');
-  });
-
-  // Experimental: talk to Monarch directly (no proxy)
-  const cbDirect = byId('settingDirectMode');
-  cbDirect.checked = !!S.settings.monarchDirect;
-  cbDirect.addEventListener('change', async () => {
-    S.settings.monarchDirect = cbDirect.checked;
-    S.monarchSessionToken = '';   // token from the proxy path may not apply; log in fresh
-    await save();
-    applyConnectionModeUI();
-    toast(cbDirect.checked ? 'Direct mode on — no proxy needed' : 'Direct mode off — using your proxy', 'ok');
-  });
-
   const cbHidden = byId('settingShowHidden');
   cbHidden.checked = S.settings.showHidden;
   cbHidden.addEventListener('change', async () => {
@@ -4243,7 +3986,8 @@ function setupSettings() {
       budgetMergeGroups: S.budgetMergeGroups,
       budgetSourceOverrides: S.budgetSourceOverrides,
       budgetGroupSourceOverrides: S.budgetGroupSourceOverrides,
-      settings: S.settings,
+      // Credentials and the TOTP secret are deliberately left out of backup files
+      settings: { ...S.settings, monarchMfaSecret: '' },
     };
   }
 
@@ -4255,7 +3999,10 @@ function setupSettings() {
     if (data.budgetMergeGroups !== undefined)          S.budgetMergeGroups = data.budgetMergeGroups;
     if (data.budgetSourceOverrides !== undefined)      S.budgetSourceOverrides = data.budgetSourceOverrides;
     if (data.budgetGroupSourceOverrides !== undefined) S.budgetGroupSourceOverrides = data.budgetGroupSourceOverrides;
-    if (data.settings !== undefined)                   S.settings = data.settings;
+    if (data.settings !== undefined) {
+      S.settings = { ...S.settings, ...data.settings,
+        monarchMfaSecret: data.settings.monarchMfaSecret || S.settings.monarchMfaSecret };
+    }
   }
 
   // Export to file
@@ -4291,181 +4038,6 @@ function setupSettings() {
     importInput.value = '';
   });
 
-  // Cloud backup (hosted users only)
-  const cloudSection = byId('cloudBackupSection');
-  const cloudSaveBtn = byId('btnCloudSave');
-
-  function updateCloudSaveState() {
-    const enabled = S.connectionMode === 'hosted' && !!S.firebaseEmail;
-    cloudSaveBtn.disabled = !enabled;
-    cloudSaveBtn.title = enabled ? '' : 'Sign in to your Monarch Bridge account first';
-  }
-
-  if (S.connectionMode === 'hosted') cloudSection.classList.remove('hidden');
-  updateCloudSaveState();
-
-  const versionListEl = byId('cloudVersionList');
-  const nameBar = byId('cvNameBar');
-  const nameInput = byId('cvNameInput');
-  const nameConfirm = byId('cvNameConfirm');
-  const nameCancel = byId('cvNameCancel');
-  let cloudVersions = [];
-  let _nameAction = null; // { type: 'save' } or { type: 'rename', versionId }
-
-  function showNameBar(defaultName, action) {
-    _nameAction = action;
-    nameInput.value = defaultName;
-    nameConfirm.textContent = action.type === 'save' ? 'Save' : 'Rename';
-    nameBar.classList.remove('hidden');
-    nameInput.focus();
-    nameInput.select();
-  }
-
-  function hideNameBar() {
-    nameBar.classList.add('hidden');
-    _nameAction = null;
-  }
-
-  nameCancel.addEventListener('click', hideNameBar);
-  nameInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); nameConfirm.click(); }
-    if (e.key === 'Escape') hideNameBar();
-  });
-
-  nameConfirm.addEventListener('click', async () => {
-    const name = nameInput.value.trim() || 'Untitled';
-    const action = _nameAction;
-    hideNameBar();
-    if (!action) return;
-
-    const statusEl = byId('cloudBackupStatus');
-
-    if (action.type === 'save') {
-      statusEl.style.color = 'var(--txt3)';
-      statusEl.textContent = 'Saving…';
-      try {
-        await msg('FIREBASE_SAVE_BACKUP', { backup: getBackupPayload(), name });
-        statusEl.style.color = 'var(--green)';
-        statusEl.textContent = 'Saved ' + new Date().toLocaleTimeString();
-        await refreshCloudVersions();
-      } catch (err) {
-        statusEl.style.color = 'var(--red)';
-        statusEl.textContent = err.message || 'Save failed';
-      }
-    } else if (action.type === 'rename') {
-      try {
-        await msg('FIREBASE_UPDATE_BACKUP', { versionId: action.versionId, name });
-        const v = cloudVersions.find(x => x.id === action.versionId);
-        if (v) v.name = name;
-        renderCloudVersions();
-      } catch (err) { toast(err.message || 'Rename failed', 'err'); }
-    }
-  });
-
-  function renderCloudVersions() {
-    if (!cloudVersions.length) {
-      versionListEl.classList.add('hidden');
-      return;
-    }
-    versionListEl.classList.remove('hidden');
-    versionListEl.innerHTML = cloudVersions.map(v => {
-      const d = v.savedAt ? new Date(v.savedAt) : null;
-      const dateStr = d ? d.toLocaleDateString() + ' ' + d.toLocaleTimeString() : v.id;
-      const name = v.name || 'Untitled';
-      const pinned = v.pinned || false;
-      const pinIcon = pinned ? '📌' : '📌';
-      return `<div class="cv-row ${pinned ? 'pinned' : ''}" data-vid="${esc(v.id)}">
-        <span class="cv-name" title="${esc(name)}">${esc(name)}</span>
-        <span class="cv-date">${esc(dateStr)}</span>
-        <span class="cv-actions">
-          <button class="cv-btn pin-btn ${pinned ? 'pin-active' : ''}" data-action="pin" title="${pinned ? 'Unpin' : 'Pin (prevents auto-delete)'}">${pinIcon}</button>
-          <button class="cv-btn" data-action="rename" title="Rename">✏️</button>
-          <button class="cv-btn restore" data-action="restore" title="Restore this backup">↩</button>
-          <button class="cv-btn delete" data-action="delete" title="Delete">✕</button>
-        </span>
-      </div>`;
-    }).join('');
-  }
-
-  async function refreshCloudVersions() {
-    try {
-      const res = await msg('FIREBASE_LOAD_BACKUP', { listOnly: true });
-      cloudVersions = res.versions || [];
-      renderCloudVersions();
-    } catch { /* silent */ }
-  }
-
-  // Delegated click handler for version list actions
-  versionListEl.addEventListener('click', async (e) => {
-    const btn = e.target.closest('[data-action]');
-    if (!btn) return;
-    const row = btn.closest('.cv-row');
-    const vid = row?.dataset.vid;
-    if (!vid) return;
-    const action = btn.dataset.action;
-    const statusEl = byId('cloudBackupStatus');
-
-    if (action === 'restore') {
-      statusEl.style.color = 'var(--txt3)';
-      statusEl.textContent = 'Loading…';
-      try {
-        const res = await msg('FIREBASE_LOAD_BACKUP', { versionId: vid });
-        if (!res.backup) { statusEl.style.color = 'var(--amber)'; statusEl.textContent = 'Not found'; return; }
-        applyBackupPayload(res.backup);
-        await save();
-        renderAll();
-        statusEl.style.color = 'var(--green)';
-        statusEl.textContent = 'Restored';
-        toast('Cloud backup restored', 'ok');
-      } catch (err) {
-        statusEl.style.color = 'var(--red)';
-        statusEl.textContent = err.message || 'Restore failed';
-      }
-    } else if (action === 'pin') {
-      const v = cloudVersions.find(x => x.id === vid);
-      const newPinned = !(v?.pinned);
-      const pinnedCount = cloudVersions.filter(x => x.pinned).length;
-      if (newPinned && pinnedCount >= 2) { toast('Maximum 2 pinned backups', 'err'); return; }
-      try {
-        await msg('FIREBASE_UPDATE_BACKUP', { versionId: vid, pinned: newPinned });
-        if (v) v.pinned = newPinned;
-        renderCloudVersions();
-      } catch (err) { toast(err.message || 'Update failed', 'err'); }
-    } else if (action === 'rename') {
-      const v = cloudVersions.find(x => x.id === vid);
-      showNameBar(v?.name || '', { type: 'rename', versionId: vid });
-    } else if (action === 'delete') {
-      const v = cloudVersions.find(x => x.id === vid);
-      if (v?.pinned) { toast('Unpin before deleting', 'err'); return; }
-      try {
-        await msg('FIREBASE_DELETE_BACKUP', { versionId: vid });
-        cloudVersions = cloudVersions.filter(x => x.id !== vid);
-        renderCloudVersions();
-        toast('Backup deleted', 'ok');
-      } catch (err) { toast(err.message || 'Delete failed', 'err'); }
-    }
-  });
-
-  if (S.connectionMode === 'hosted') refreshCloudVersions();
-
-  // React to sign-in / sign-out while the popup is open
-  document.addEventListener('firebase-auth-changed', () => {
-    const hosted = S.connectionMode === 'hosted';
-    const cs = byId('cloudBackupSection');
-    const vl = byId('cloudVersionList');
-    if (hosted && S.firebaseEmail) {
-      cs.classList.remove('hidden');
-      refreshCloudVersions();
-    } else {
-      vl.classList.add('hidden');
-      byId('cvNameBar').classList.add('hidden');
-    }
-    updateCloudSaveState();
-  });
-
-  byId('btnCloudSave').addEventListener('click', () => {
-    showNameBar('Backup ' + new Date().toLocaleDateString(), { type: 'save' });
-  });
 }
 
 // ── Render all ───────────────────────────────────────────────

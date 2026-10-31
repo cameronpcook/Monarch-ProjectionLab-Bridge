@@ -27,7 +27,7 @@ The script runs Apple's `xcrun safari-web-extension-packager` (formerly `safari-
 3. Choose the macOS app scheme and press **Run** (⌘R). A small host app opens.
 4. In Safari, open **Settings → Extensions** and enable *Monarch → ProjectionLab Bridge*.
 5. If you build without signing: enable **Safari → Settings → Advanced → Show features for web developers**, then **Develop → Allow Unsigned Extensions**. Safari turns this setting off again each time it quits.
-6. Grant website access when Safari asks, or under **Settings → Extensions → Monarch → ProjectionLab Bridge → Edit Websites**. The extension needs access to `app.projectionlab.com`, `api.monarch.com`, the Firebase hosts, and `localhost` if you use the self-hosted proxy.
+6. Grant website access when Safari asks, or under **Settings → Extensions → Monarch → ProjectionLab Bridge → Edit Websites**. The extension needs access to `app.projectionlab.com` and `api.monarch.com`.
 
 ## 3. Distribute (optional)
 
@@ -40,9 +40,7 @@ These are the places where Safari is most likely to behave differently. Test eac
 | Area | What to check | Why |
 |---|---|---|
 | Sync to ProjectionLab | Preview and push a sync | Needs `world: "MAIN"` injection, plus `new Function()` running under ProjectionLab's page CSP |
-| Self-hosted mode | Fetch accounts from `http://localhost:47821` | Safari's handling of plain-HTTP localhost from extensions is unverified |
-| Custom proxy URL | Use the "Grant permission" button | `permissions.request` / `optional_host_permissions` support in Safari is unverified. You may need to grant the site in Safari's settings instead. |
-| Hosted mode | Sign in, then open billing | Firebase auth fetches and opening a new tab |
+| Monarch sign-in | Load from Monarch, including a 2FA code if you use one | Login and data requests go straight to `api.monarch.com` from the extension |
 | Multiple ProjectionLab tabs | Open two tabs and sync | Safari may not provide `tab.lastAccessed`. The code now falls back to the active tab. |
 | Popup layout | Open the popup | The popup is 780px wide, and Safari may constrain popover size |
 | Background worker | Leave Safari idle and come back, then sync | Safari may suspend the background service worker more aggressively than Chrome |
@@ -50,4 +48,4 @@ These are the places where Safari is most likely to behave differently. Test eac
 ## Notes
 
 - **Code changes for Safari:** `execInPL` in `background/service-worker.js` now accepts either the standard `[{ result }]` array or a bare value from `executeScript`, since some Safari versions reportedly return the bare value. Multi-tab selection also prefers the active tab when `lastAccessed` is missing. Both changes leave Chrome's behavior unchanged.
-- **iOS:** Mobile Safari has a much smaller popup, and iOS can't reach a proxy on `localhost` unless the proxy runs on the phone. Only the hosted mode could plausibly work there.
+- **iOS:** untested. Mobile Safari has a much smaller popup, and the 780px-wide layout would need rework.

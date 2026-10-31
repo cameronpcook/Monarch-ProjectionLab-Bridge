@@ -59,5 +59,6 @@ Thumbs.db
 test.json
 *.log
 
-# Safari (generated Xcode project — regenerate with safari/build-safari.sh)
+
+# Safari (generated Xcode project; regenerate with safari/build-safari.sh)
 safari/xcode/
