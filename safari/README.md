@@ -29,6 +29,12 @@ The script runs Apple's `xcrun safari-web-extension-packager` (formerly `safari-
 5. If you build without signing: enable **Safari → Settings → Advanced → Show features for web developers**, then **Develop → Allow Unsigned Extensions**. Safari turns this setting off again each time it quits.
 6. Grant website access when Safari asks, or under **Settings → Extensions → Monarch → ProjectionLab Bridge → Edit Websites**. The extension needs access to `app.projectionlab.com` and `api.monarch.com`.
 
+## Updating to a new version
+
+1. Replace the files in `monarch-extension/` with the new version. Keep your `safari/xcode/` folder.
+2. In Xcode, press **⌘R** to rebuild.
+3. **If the popup is blank or a feature is missing**, the update probably added new files that your Xcode project doesn't know about yet. Regenerate the project by running the build script again (step 1 above), then redo step 2's signing setup. If the build fails with "Embedded binary's bundle identifier is not prefixed with the parent app's bundle identifier," make the extension target's bundle ID equal the app's ID plus `.Extension`.
+
 ## 3. Distribute (optional)
 
 Archive the app in Xcode (**Product → Archive**) and upload it to App Store Connect. Apple also offers a web-based packager in App Store Connect that builds the app without Xcode. See Apple's [Packaging a web extension for Safari](https://developer.apple.com/documentation/safariservices/packaging-a-web-extension-for-safari).
