@@ -1,57 +1,10 @@
 // ============================================================
-// Monarch → ProjectionLab Bridge  —  Service Worker v4
+// Monarch → ProjectionLab Bridge  —  Service Worker v5
+// Talks to Monarch directly from the browser (no proxy or hosted service)
+// and writes to ProjectionLab through its Plugin API in an open PL tab.
 // ============================================================
 
-const DEFAULT_MONARCH_API       = 'http://localhost:47821';
-const FIREBASE_API_KEY          = 'AIzaSyBlQFWbPQ1bhREni8ZhfKbRsd3lKOPPO0s';
-const FIREBASE_FUNCTIONS_BASE   = 'https://us-central1-monarch-bridge-prod.cloudfunctions.net';
-
-async function isHostedMode() {
-  const stored = await chrome.storage.local.get('connectionMode');
-  return (stored.connectionMode || 'self-hosted') === 'hosted';
-}
-
-async function getFirebaseToken() {
-  const stored = await chrome.storage.local.get(['firebaseIdToken', 'firebaseRefreshToken', 'firebaseTokenExpiry']);
-  const now = Date.now();
-  // Valid if not expiring within the next 5 minutes
-  if (stored.firebaseIdToken && stored.firebaseTokenExpiry > now + 5 * 60 * 1000) {
-    return stored.firebaseIdToken;
-  }
-  if (!stored.firebaseRefreshToken) return null;
-  try {
-    const res = await fetch(
-      `https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(stored.firebaseRefreshToken)}`,
-      }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const newToken   = data.id_token;
-    const newRefresh = data.refresh_token;
-    const expiry     = Date.now() + (parseInt(data.expires_in, 10) || 3600) * 1000;
-    await chrome.storage.local.set({ firebaseIdToken: newToken, firebaseRefreshToken: newRefresh, firebaseTokenExpiry: expiry });
-    return newToken;
-  } catch { return null; }
-}
-
-async function monarchHeaders() {
-  const stored = await chrome.storage.local.get(['monarchEmail', 'monarchPassword', 'monarchSessionToken', 'settings']);
-  const headers = { 'Accept': 'application/json' };
-  if (stored.monarchSessionToken) headers['X-Monarch-Token']    = stored.monarchSessionToken;
-  if (stored.monarchEmail)        headers['X-Monarch-Email']    = stored.monarchEmail;
-  if (stored.monarchPassword)     headers['X-Monarch-Password'] = stored.monarchPassword;
-  const s = stored.settings || {};
-  if (s.monarchMfaEnabled && s.monarchMfaSecret) headers['X-Monarch-MFA'] = s.monarchMfaSecret;
-  if (await isHostedMode()) {
-    const idToken = await getFirebaseToken();
-    if (idToken) headers['Authorization'] = `Bearer ${idToken}`;
-  }
-  return headers;
-}
+const MONARCH_LOGIN_URL = 'https://api.monarch.com/auth/login/';
 
 // ---------------------------------------------------------------------------
 // TOTP generator (RFC 6238) using Web Crypto API
@@ -102,42 +55,222 @@ async function getMfaSecretIfEnabled() {
   return null;
 }
 
-async function monarchBase() {
-  if (await isHostedMode()) return FIREBASE_FUNCTIONS_BASE;
-  const stored = await chrome.storage.local.get('monarchApiUrl');
-  return (stored.monarchApiUrl || DEFAULT_MONARCH_API).replace(/\/$/, '');
-}
 
-// Map local proxy paths to Firebase Cloud Function names
-const FIREBASE_PATH_MAP = {
-  '/accounts':        '/get_accounts',
-  '/expense-budgets': '/get_expense_budgets',
-  '/budgets':         '/get_budgets',
-  '/transactions':    '/get_transactions',
-  '/cashflow':        '/get_cashflow',
-  '/categories':      '/get_categories',
-  '/tags':            '/get_tags',
-  '/recurring':       '/get_recurring_transactions',
-};
-
-async function monarchUrl(localPath) {
-  const base = await monarchBase();
-  if (await isHostedMode()) {
-    return base + (FIREBASE_PATH_MAP[localPath] || localPath);
+// ---------------------------------------------------------------------------
+// Monarch login (REST). Returns the fetch Response.
+// ---------------------------------------------------------------------------
+// `password` comes from the popup when the user chose not to save it.
+async function monarchLogin(totp, password) {
+  const stored = await chrome.storage.local.get(['monarchEmail', 'monarchPassword']);
+  password = password || stored.monarchPassword;
+  if (!stored.monarchEmail || !password) {
+    throw new Error('Enter your Monarch email and password first');
   }
-  return base + localPath;
+  const body = {
+    username: stored.monarchEmail,
+    password,
+    supports_mfa: true,
+    trusted_device: false,
+  };
+  if (totp) body.totp = totp;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    return await fetch(MONARCH_LOGIN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Client-Platform': 'web' },
+      credentials: 'omit',
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Monarch login timed out');
+    throw new Error(`Could not reach Monarch: ${e.message}`);
+  } finally { clearTimeout(timeout); }
 }
 
-async function monarchErrorMessage(res) {
-  try {
-    const body = await res.json();
-    const detail = body?.detail || '';
-    // Strip internal prefix if present, use the human-readable part
-    if (detail.includes('MFA_REQUIRED:')) return detail.replace('MFA_REQUIRED: ', '');
-    if (detail) return detail;
-  } catch {}
-  return `Monarch API returned ${res.status}`;
+async function loginErrorMessage(res, fallback) {
+  const body = await res.json().catch(() => ({}));
+  return body?.detail || `${fallback}: ${res.status}`;
 }
+
+async function saveTokenFrom(res) {
+  const data = await res.json();
+  if (!data.token) throw new Error('Monarch did not return a session token');
+  await chrome.storage.local.set({ monarchSessionToken: data.token });
+  return data.token;
+}
+
+// Log in; auto-completes MFA when a TOTP secret is saved in Settings.
+async function monarchInitiateLogin(password) {
+  let res = await monarchLogin(undefined, password);
+  if (res.status === 403) {                 // 403 = MFA required
+    const mfaSecret = await getMfaSecretIfEnabled();
+    if (!mfaSecret) return { ok: true, requires_mfa: true };
+    res = await monarchLogin(await generateTOTP(mfaSecret), password);
+    if (!res.ok) throw new Error(await loginErrorMessage(res, 'Auto-MFA failed'));
+  } else if (!res.ok) {
+    throw new Error(await loginErrorMessage(res, 'Login failed'));
+  }
+  return { ok: true, requires_mfa: false, token: await saveTokenFrom(res) };
+}
+
+// ---------------------------------------------------------------------------
+// Monarch GraphQL API (queries mirror Monarch's web app)
+// ---------------------------------------------------------------------------
+const MONARCH_GRAPHQL_URL = 'https://api.monarch.com/graphql';
+
+const TOKEN_EXPIRED_MSG = 'TOKEN_EXPIRED: Your Monarch session has expired. Re-authenticate.';
+
+async function monarchGraphQL(operationName, query, variables = {}) {
+  const { monarchSessionToken } = await chrome.storage.local.get('monarchSessionToken');
+  if (!monarchSessionToken) throw new Error(TOKEN_EXPIRED_MSG);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  let res;
+  try {
+    res = await fetch(MONARCH_GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Client-Platform': 'web',
+        'Authorization': `Token ${monarchSessionToken}`,
+      },
+      credentials: 'omit',
+      body: JSON.stringify({ operationName, query, variables }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Monarch API timed out after 20s');
+    throw new Error(`Could not reach Monarch directly: ${e.message}`);
+  } finally { clearTimeout(timeout); }
+  if (res.status === 401) throw new Error(TOKEN_EXPIRED_MSG);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Monarch API error ${res.status}${text ? ': ' + text.slice(0, 200) : ''}`);
+  }
+  const body = await res.json();
+  if (body.errors?.length) {
+    const msgs = body.errors.map(e => e.message || '').join('; ');
+    if (/not authenticated|not logged in|unauthori[sz]ed/i.test(msgs)) throw new Error(TOKEN_EXPIRED_MSG);
+    throw new Error(`Monarch GraphQL error: ${msgs}`);
+  }
+  return body.data || {};
+}
+
+const GQL_ACCOUNTS = `
+query GetAccounts {
+  accountTypeSummaries {
+    type { name display }
+    accounts {
+      id name displayName type { name display }
+      subtype { name display }
+      currentBalance displayBalance signedBalance isHidden isAsset
+      institution { name url logo }
+      updatedAt
+    }
+  }
+}`;
+
+const GQL_CATEGORIES = `
+query GetCategories {
+  categories {
+    id name order isSystemCategory isDisabled
+    group { id name type }
+  }
+}`;
+
+const GQL_BUDGETS = `
+query GetJointPlanningData($startDate: Date!, $endDate: Date!) {
+  budgetData(startMonth: $startDate, endMonth: $endDate) {
+    monthlyAmountsByCategory {
+      category { id name }
+      monthlyAmounts { month plannedCashFlowAmount actualAmount }
+    }
+    totalsByMonth {
+      month
+      totalIncome { plannedAmount actualAmount }
+      totalExpenses { plannedAmount actualAmount }
+    }
+  }
+}`;
+
+async function directGetAccounts() {
+  const data = await monarchGraphQL('GetAccounts', GQL_ACCOUNTS);
+  return (data.accountTypeSummaries || []).flatMap(g => g.accounts || []);
+}
+
+function localISODate(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Same shape as the proxy's /expense-budgets:
+// [{ categoryId, categoryName, groupName, monthlyAmounts }]
+async function directGetExpenseBudgets() {
+  const end = new Date();
+  const start = new Date(end.getTime() - 365 * 24 * 3600 * 1000);
+  const [catData, budgetData] = await Promise.all([
+    monarchGraphQL('GetCategories', GQL_CATEGORIES),
+    monarchGraphQL('GetJointPlanningData', GQL_BUDGETS,
+      { startDate: localISODate(start), endDate: localISODate(end) }),
+  ]);
+  const expenseCats = new Map();
+  for (const c of catData.categories || []) {
+    if ((c.group?.type || '').toLowerCase() === 'expense') {
+      expenseCats.set(c.id, { name: c.name, groupName: c.group?.name || '' });
+    }
+  }
+  const result = [];
+  for (const item of budgetData.budgetData?.monthlyAmountsByCategory || []) {
+    const cat = expenseCats.get(item.category?.id);
+    if (cat) {
+      result.push({
+        categoryId:     item.category.id,
+        categoryName:   cat.name,
+        groupName:      cat.groupName,
+        monthlyAmounts: item.monthlyAmounts || [],
+      });
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Sync reminder badge. Only reads the last-sync time from storage; it never
+// contacts Monarch or ProjectionLab.
+// ---------------------------------------------------------------------------
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function updateStaleBadge() {
+  const { lastSyncAt, settings } = await chrome.storage.local.get(['lastSyncAt', 'settings']);
+  const days = settings?.staleReminderDays ?? 7;
+  let text = '';
+  if (days > 0 && lastSyncAt) {
+    const age = Math.floor((Date.now() - lastSyncAt) / DAY_MS);
+    if (age >= days) text = `${age}d`;
+  }
+  await chrome.action.setBadgeText({ text });
+  if (text) {
+    await chrome.action.setBadgeBackgroundColor({ color: '#F59E0B' });
+    await chrome.action.setTitle({ title: `Monarch → ProjectionLab Bridge — last synced ${text.slice(0, -1)} days ago` });
+  } else {
+    await chrome.action.setTitle({ title: 'Monarch → ProjectionLab Bridge' });
+  }
+}
+
+function safeUpdateBadge() { updateStaleBadge().catch(() => {}); }
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.alarms.create('stale-badge', { periodInMinutes: 60 });
+  safeUpdateBadge();
+});
+chrome.runtime.onStartup.addListener(safeUpdateBadge);
+chrome.alarms.onAlarm.addListener(a => { if (a.name === 'stale-badge') safeUpdateBadge(); });
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && (changes.lastSyncAt || changes.settings)) safeUpdateBadge();
+});
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   handle(msg).then(sendResponse).catch(e => sendResponse({ error: e.message || String(e) }));
@@ -148,21 +281,7 @@ async function handle(msg) {
   switch (msg.type) {
 
     case 'FETCH_MONARCH_ACCOUNTS': {
-      const url = await monarchUrl('/accounts');
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-      let res;
-      try {
-        res = await fetch(url, { headers: await monarchHeaders(), signal: controller.signal });
-      } catch (e) {
-        if (e.name === 'AbortError') throw new Error('Monarch API timed out after 10s — is the local server running?');
-        throw e;
-      } finally { clearTimeout(timeout); }
-      if (!res.ok) throw new Error(await monarchErrorMessage(res));
-      const body = await res.json();
-      const raw = Array.isArray(body) ? body : (body?.accounts ?? null);
-      if (!Array.isArray(raw)) throw new Error('Unexpected response from Monarch API');
-      const accounts = raw.map(a => ({
+      const accounts = (await directGetAccounts()).map(a => ({
         ...a,
         name:    a.displayName    ?? a.name    ?? '',
         balance: a.displayBalance ?? a.currentBalance ?? a.balance ?? 0,
@@ -170,167 +289,22 @@ async function handle(msg) {
       return { accounts };
     }
 
-    case 'MONARCH_INITIATE_LOGIN': {
-      const hosted = await isHostedMode();
-      if (hosted) {
-        // Login directly to Monarch from the browser (REST endpoint).
-        // Firebase/GCP can't reach this endpoint (Cloudflare blocks server IPs),
-        // but the extension runs in the user's browser so it works fine.
-        const stored = await chrome.storage.local.get(['monarchEmail', 'monarchPassword']);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 20000);
-        let res;
-        try {
-          res = await fetch('https://api.monarch.com/auth/login/', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Client-Platform': 'web',
-            },
-            credentials: 'omit',
-            body: JSON.stringify({
-              username: stored.monarchEmail || '',
-              password: stored.monarchPassword || '',
-              supports_mfa: true,
-              trusted_device: false,
-            }),
-            signal: controller.signal,
-          });
-        } catch (e) {
-          if (e.name === 'AbortError') throw new Error('Login timed out');
-          throw e;
-        } finally { clearTimeout(timeout); }
+    case 'FETCH_MONARCH_BUDGETS':
+      return { budgets: await directGetExpenseBudgets() };
 
-        // 403 = MFA required — auto-complete if TOTP secret is configured
-        if (res.status === 403) {
-          const mfaSecret = await getMfaSecretIfEnabled();
-          if (mfaSecret) {
-            const totp = await generateTOTP(mfaSecret);
-            const mfaRes = await fetch('https://api.monarch.com/auth/login/', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Client-Platform': 'web' },
-              credentials: 'omit',
-              body: JSON.stringify({
-                username: stored.monarchEmail || '',
-                password: stored.monarchPassword || '',
-                supports_mfa: true,
-                trusted_device: false,
-                totp,
-              }),
-            });
-            if (!mfaRes.ok) {
-              const mfaBody = await mfaRes.json().catch(() => ({}));
-              throw new Error(mfaBody?.detail || `Auto-MFA failed: ${mfaRes.status}`);
-            }
-            const mfaData = await mfaRes.json();
-            if (mfaData.token) {
-              await chrome.storage.local.set({ monarchSessionToken: mfaData.token });
-            }
-            return { ok: true, requires_mfa: false, token: mfaData.token };
-          }
-          return { ok: true, requires_mfa: true };
-        }
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body?.detail || `Login failed: ${res.status}`);
-        }
-        const data = await res.json();
-        if (data.token) {
-          await chrome.storage.local.set({ monarchSessionToken: data.token });
-        }
-        return { ok: true, requires_mfa: false, token: data.token };
-      }
-      // Self-hosted: use local proxy
-      const url2 = await monarchUrl('/auth/initiate');
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
-      let res;
-      try {
-        const hdrs = await monarchHeaders();
-        hdrs['Content-Type'] = 'application/json';
-        res = await fetch(url2, { method: 'POST', headers: hdrs, body: '{}', signal: controller.signal });
-      } catch (e) {
-        if (e.name === 'AbortError') throw new Error('Login timed out — is the proxy running?');
-        throw e;
-      } finally { clearTimeout(timeout); }
-      if (!res.ok) throw new Error(await monarchErrorMessage(res));
-      return await res.json();
-    }
+    case 'MONARCH_INITIATE_LOGIN':
+      return monarchInitiateLogin(msg.password);
 
     case 'MONARCH_COMPLETE_MFA': {
-      const hosted2 = await isHostedMode();
-      if (hosted2) {
-        // MFA: re-POST to same Monarch REST endpoint with totp code
-        const stored = await chrome.storage.local.get(['monarchEmail', 'monarchPassword']);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 20000);
-        let res;
-        try {
-          res = await fetch('https://api.monarch.com/auth/login/', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Client-Platform': 'web',
-            },
-            credentials: 'omit',
-            body: JSON.stringify({
-              username: stored.monarchEmail || '',
-              password: stored.monarchPassword || '',
-              supports_mfa: true,
-              trusted_device: false,
-              totp: msg.code,
-            }),
-            signal: controller.signal,
-          });
-        } catch (e) {
-          if (e.name === 'AbortError') throw new Error('MFA verification timed out');
-          throw e;
-        } finally { clearTimeout(timeout); }
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body?.detail || `MFA failed: ${res.status}`);
-        }
-        const data = await res.json();
-        if (data.token) {
-          await chrome.storage.local.set({ monarchSessionToken: data.token });
-        }
-        return { ok: true, token: data.token };
-      }
-      // Self-hosted: use local proxy
-      const url3 = await monarchUrl('/auth/complete');
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
-      let res;
-      try {
-        const hdrs = await monarchHeaders();
-        hdrs['Content-Type'] = 'application/json';
-        res = await fetch(url3, {
-          method: 'POST', headers: hdrs,
-          body: JSON.stringify({ code: msg.code }),
-          signal: controller.signal,
-        });
-      } catch (e) {
-        if (e.name === 'AbortError') throw new Error('MFA verification timed out');
-        throw e;
-      } finally { clearTimeout(timeout); }
-      if (!res.ok) throw new Error(await monarchErrorMessage(res));
-      return await res.json();
+      const res = await monarchLogin(msg.code, msg.password);
+      if (!res.ok) throw new Error(await loginErrorMessage(res, 'MFA failed'));
+      return { ok: true, token: await saveTokenFrom(res) };
     }
 
+    // Get a fresh session token (uses the saved TOTP secret if MFA is on).
     case 'MONARCH_REFRESH_SESSION': {
-      const urlR = await monarchUrl('/auth/refresh');
-      const hdrs = await monarchHeaders();
-      hdrs['Content-Type'] = 'application/json';
-      const controllerR = new AbortController();
-      const timeoutR = setTimeout(() => controllerR.abort(), 15000);
-      let resR;
-      try {
-        resR = await fetch(urlR, { method: 'POST', headers: hdrs, signal: controllerR.signal });
-      } catch (e) {
-        if (e.name === 'AbortError') throw new Error('Monarch session refresh timed out — is the proxy running?');
-        throw e;
-      } finally { clearTimeout(timeoutR); }
-      if (!resR.ok) throw new Error(`Session refresh failed: ${resR.status}`);
+      const r = await monarchInitiateLogin(msg.password);
+      if (r.requires_mfa) throw new Error('MFA code required — save your TOTP secret or use Load from Monarch');
       return { ok: true };
     }
 
@@ -687,25 +661,6 @@ async function handle(msg) {
       }, [msg.notesMap]);
     }
 
-    case 'FETCH_MONARCH_BUDGETS': {
-      const url2 = await monarchUrl('/expense-budgets');
-      const controller2 = new AbortController();
-      const timeout2 = setTimeout(() => controller2.abort(), 10000);
-      let res2;
-      try {
-        res2 = await fetch(url2, { headers: await monarchHeaders(), signal: controller2.signal });
-      } catch (e) {
-        if (e.name === 'AbortError') throw new Error('Monarch API timed out after 10s');
-        throw e;
-      } finally { clearTimeout(timeout2); }
-      if (!res2.ok) throw new Error(await monarchErrorMessage(res2));
-      const budgets = await res2.json();
-      if (!Array.isArray(budgets)) throw new Error('Unexpected budget response from Monarch API');
-      return { budgets };
-    }
-
-    // Update expense amounts in PL plans.
-    // expenseUpdates: [{ planId, expenseId, amount }]
     case 'PL_WRITE_PLAN_EXPENSES': {
       return execInPL(msg.key, async (key, expenseUpdates) => {
         const exported = await window.projectionlabPluginAPI.exportData({ key });
@@ -895,135 +850,6 @@ async function handle(msg) {
       }, [msg.expenseUpdates]);
     }
 
-    case 'FIREBASE_SIGN_IN':
-    case 'FIREBASE_SIGN_UP': {
-      const endpoint = msg.type === 'FIREBASE_SIGN_UP'
-        ? `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_API_KEY}`
-        : `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`;
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: msg.email, password: msg.password, returnSecureToken: true }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        const errMsg = data?.error?.message || 'Authentication failed';
-        throw new Error(errMsg.replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase()));
-      }
-      const expiry = Date.now() + (parseInt(data.expiresIn, 10) || 3600) * 1000;
-      await chrome.storage.local.set({
-        firebaseIdToken:      data.idToken,
-        firebaseRefreshToken: data.refreshToken,
-        firebaseTokenExpiry:  expiry,
-        firebaseEmail:        data.email,
-      });
-      return { ok: true, email: data.email };
-    }
-
-    case 'FIREBASE_SIGN_OUT': {
-      await chrome.storage.local.remove(['firebaseIdToken', 'firebaseRefreshToken', 'firebaseTokenExpiry', 'firebaseEmail']);
-      return { ok: true };
-    }
-
-    case 'FIREBASE_OPEN_BILLING': {
-      const idToken = await getFirebaseToken();
-      if (!idToken) throw new Error('Not signed in');
-      const authHeader = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` };
-
-      async function openOrReuse(url) {
-        // Reuse an existing tab with the same origin, or open a new one
-        const origin = new URL(url).origin;
-        const existing = await chrome.tabs.query({ url: origin + '/*' });
-        if (existing.length) {
-          await chrome.tabs.update(existing[0].id, { url, active: true });
-        } else {
-          await chrome.tabs.create({ url });
-        }
-      }
-
-      // Try portal session first (for existing subscribers)
-      const portalRes = await fetch(FIREBASE_FUNCTIONS_BASE + '/create_portal_session', {
-        method: 'POST', headers: authHeader, body: '{}',
-      });
-      if (portalRes.ok) {
-        const portalData = await portalRes.json();
-        if (portalData.url) { await openOrReuse(portalData.url); return { ok: true }; }
-      }
-      // 404 = no subscription yet → fall through to checkout
-      if (portalRes.status >= 500) {
-        const portalBody = await portalRes.json().catch(() => ({}));
-        console.warn('Portal session error:', portalBody?.error || portalRes.status);
-      }
-
-      // No subscription yet — create a checkout session
-      const checkoutRes = await fetch(FIREBASE_FUNCTIONS_BASE + '/create_checkout_session', {
-        method: 'POST', headers: authHeader, body: '{}',
-      });
-      const checkoutBody = await checkoutRes.json().catch(() => ({}));
-      if (!checkoutRes.ok) {
-        throw new Error(checkoutBody?.error || `Billing error ${checkoutRes.status}`);
-      }
-      if (checkoutBody.url) { await openOrReuse(checkoutBody.url); return { ok: true }; }
-      throw new Error('No checkout URL returned');
-    }
-
-    case 'FIREBASE_SAVE_BACKUP': {
-      const idToken = await getFirebaseToken();
-      if (!idToken) throw new Error('Not signed in');
-      const res = await fetch(FIREBASE_FUNCTIONS_BASE + '/save_backup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-        body: JSON.stringify({ backup: msg.backup, name: msg.name || 'Untitled' }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body?.detail || `Backup save failed (${res.status})`);
-      return { ok: true };
-    }
-
-    case 'FIREBASE_LOAD_BACKUP': {
-      const idToken = await getFirebaseToken();
-      if (!idToken) throw new Error('Not signed in');
-      const payload = {};
-      if (msg.versionId) payload.versionId = msg.versionId;
-      const res = await fetch(FIREBASE_FUNCTIONS_BASE + '/load_backup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-        body: JSON.stringify(payload),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body?.detail || `Backup load failed (${res.status})`);
-      return { ok: true, backup: body.backup, versions: body.versions };
-    }
-
-    case 'FIREBASE_UPDATE_BACKUP': {
-      const idToken = await getFirebaseToken();
-      if (!idToken) throw new Error('Not signed in');
-      const payload = { versionId: msg.versionId };
-      if (msg.name !== undefined) payload.name = msg.name;
-      if (msg.pinned !== undefined) payload.pinned = msg.pinned;
-      const res = await fetch(FIREBASE_FUNCTIONS_BASE + '/update_backup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-        body: JSON.stringify(payload),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body?.detail || `Update failed (${res.status})`);
-      return { ok: true };
-    }
-
-    case 'FIREBASE_DELETE_BACKUP': {
-      const idToken = await getFirebaseToken();
-      if (!idToken) throw new Error('Not signed in');
-      const res = await fetch(FIREBASE_FUNCTIONS_BASE + '/delete_backup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-        body: JSON.stringify({ versionId: msg.versionId }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body?.detail || `Delete failed (${res.status})`);
-      return { ok: true };
-    }
-
     case 'STORAGE_SET': {
       await chrome.storage.local.set(msg.data);
       return { ok: true };
@@ -1041,20 +867,34 @@ async function handle(msg) {
   }
 }
 
+// Chrome resolves executeScript with an array of InjectionResult objects
+// ([{ frameId, result }]). Some Safari versions have been reported to resolve
+// with the bare result value instead, so accept both shapes.
+function unwrapInjectionResult(injection) {
+  if (Array.isArray(injection)) {
+    const first = injection[0];
+    if (first && typeof first === 'object' && 'result' in first) return first.result;
+    if (injection.length === 0) return undefined;
+  }
+  return injection;
+}
+
 async function execInPL(key, fn, extraArgs = []) {
   const tabs = await chrome.tabs.query({ url: 'https://app.projectionlab.com/*' });
   if (!tabs.length) throw new Error('ProjectionLab is not open. Please open app.projectionlab.com first.');
 
   let targetTab = tabs[0];
   if (tabs.length > 1) {
-    // Sort by lastAccessed descending — use the most recently focused PL tab
-    tabs.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+    // Sort by lastAccessed descending — use the most recently focused PL tab.
+    // Safari may not populate lastAccessed, so fall back to preferring the active tab.
+    tabs.sort((a, b) =>
+      ((b.lastAccessed || 0) - (a.lastAccessed || 0)) || ((b.active ? 1 : 0) - (a.active ? 1 : 0)));
     targetTab = tabs[0];
     // Notify the popup so it can surface a warning toast
     chrome.runtime.sendMessage({ type: 'WARN_MULTI_TAB', tabTitle: targetTab.title || 'ProjectionLab' }).catch(() => {});
   }
 
-  const [{ result }] = await chrome.scripting.executeScript({
+  const injection = await chrome.scripting.executeScript({
     target: { tabId: targetTab.id },
     world:  'MAIN',
     func: (serialisedFn, key, extraArgs) => {
@@ -1069,6 +909,7 @@ async function execInPL(key, fn, extraArgs = []) {
     },
     args: [fn.toString(), key, extraArgs],
   });
+  const result = unwrapInjectionResult(injection);
 
   if (result?.error) {
     const errMsg = result.error;

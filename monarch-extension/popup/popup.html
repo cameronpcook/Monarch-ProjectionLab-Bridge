@@ -28,41 +28,10 @@
   <div class="header-status">
     <span class="status-dot" id="plStatus" title="ProjectionLab"></span>
     <span class="status-dot monarch" id="monarchStatus" title="Monarch API"></span>
-    <button id="donateChip" class="donate-chip" title="Support development">
+    <button id="donateChip" class="donate-chip" title="Support the original author, Trey Corple">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
       Donate
     </button>
-    <div id="accountChipWrap" class="account-chip-wrap hidden">
-      <button id="accountChip" class="account-chip" title="Monarch Bridge Account">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-        <span id="accountChipLabel">Account</span>
-      </button>
-      <div id="accountDropdown" class="account-dropdown hidden">
-        <div id="accountDropdownSignedOut">
-          <div class="acct-dd-title">Monarch Bridge Account</div>
-          <p class="acct-dd-hint">Sign in or create an account to use the hosted service.</p>
-          <input id="acctDdEmail" type="email" class="text-input acct-dd-input" placeholder="Email" autocomplete="off"/>
-          <div class="acct-dd-pw-row">
-            <input id="acctDdPassword" type="password" class="text-input acct-dd-input" placeholder="Password" autocomplete="off"/>
-            <button class="icon-btn acct-dd-eye" id="acctDdTogglePw" title="Show/hide">👁</button>
-          </div>
-          <div class="acct-dd-btns">
-            <button class="btn btn-primary btn-sm" id="acctDdSignIn">Sign In</button>
-            <button class="btn btn-outline btn-sm" id="acctDdSignUp">Create Account</button>
-          </div>
-          <div id="acctDdStatus" class="status-line" style="margin-top:6px"></div>
-        </div>
-        <div id="accountDropdownSignedIn" class="hidden">
-          <div class="acct-dd-title">Monarch Bridge Account</div>
-          <div class="acct-dd-email" id="acctDdCurrentEmail"></div>
-          <div class="acct-dd-actions">
-            <button class="btn btn-sm btn-outline" id="acctDdBilling">Manage Billing</button>
-            <button class="btn btn-sm btn-ghost" id="acctDdSignOut">Sign Out</button>
-          </div>
-          <div id="acctDdSignedInStatus" class="status-line" style="margin-top:6px"></div>
-        </div>
-      </div>
-    </div>
   </div>
 </header>
 
@@ -99,14 +68,9 @@
 
   <div class="divider"></div>
 
-  <div id="firebaseAuthBanner" class="firebase-auth-banner hidden">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-    <span id="firebaseAuthBannerText">Hosted mode — sign in to your Monarch Bridge account using the <strong>Account</strong> button in the header.</span>
-  </div>
-
   <div class="section">
-    <h2 class="section-title">Monarch API</h2>
-    <p class="section-hint" id="monarchCredentialsHint">Enter your Monarch Money credentials. These are stored locally in your browser and sent only to your proxy — never persisted on any server.</p>
+    <h2 class="section-title">Monarch</h2>
+    <p class="section-hint">Enter your Monarch Money login once. It's saved in this browser and sent only to Monarch. After you sign in, the extension reuses your Monarch session, so you won't need a new 2FA code each time.</p>
     <div class="input-row">
       <input id="monarchEmail" type="email" class="text-input"
              placeholder="Monarch email" autocomplete="off"/>
@@ -117,19 +81,6 @@
       <button class="icon-btn" id="toggleMonarchPassword" title="Show/hide">👁</button>
     </div>
 
-    <div id="monarchUrlSection">
-    <p class="section-hint">Proxy URL <span style="color:var(--txt3)">(custom URLs will prompt for permission)</span></p>
-    <div class="input-row">
-      <input id="monarchApiUrl" type="text" class="text-input mono"
-             placeholder="http://localhost:47821"/>
-    </div>
-    <div id="monarchPermStatus" class="status-line"></div>
-    <div class="btn-row">
-      <button class="btn btn-outline" id="grantPermissionBtn" style="display:none">
-        🔑 Grant permission for this URL
-      </button>
-    </div>
-    </div>
     <div class="btn-row" style="align-items:center;gap:10px">
       <button class="btn btn-primary" id="fetchMonarchAccounts">Load from Monarch</button>
       <span id="monarchFetchStatus" class="status-line" style="margin:0"></span>
@@ -469,25 +420,6 @@
 ══════════════════════════════════════════════════════════ -->
 <div class="tab-panel" id="panel-settings">
   <div class="section">
-    <h2 class="section-title">Connection Mode</h2>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-label">Use Hosted Service</div>
-        <div class="setting-desc">
-          Connect via the Monarch Bridge cloud service (subscription required).
-          When off, connect to your self-hosted Docker proxy at the URL configured in Setup.
-        </div>
-      </div>
-      <label class="toggle-wrap">
-        <input type="checkbox" id="settingHostedMode"/>
-        <span class="toggle-track">
-          <span class="toggle-thumb"></span>
-        </span>
-      </label>
-    </div>
-  </div>
-
-  <div class="section" style="border-top:1px solid var(--border)">
     <h2 class="section-title">Display</h2>
 
     <div class="setting-row">
@@ -528,6 +460,39 @@
       </label>
     </div>
 
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label">Sync Reminder</div>
+        <div class="setting-desc">
+          Show a badge on the toolbar icon (for example "8d") when you haven't synced for this many days.
+          It's only a reminder: the extension never syncs or contacts Monarch on its own. Set to 0 to turn it off.
+        </div>
+      </div>
+      <div class="bsb-inline">
+        <input id="settingStaleDays" type="number" class="text-input bsb-num" min="0" max="365"/>
+        <span class="bsb-unit">days</span>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="section" style="border-top:1px solid var(--border)">
+    <h2 class="section-title">Monarch Login</h2>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label">Remember Monarch Password</div>
+        <div class="setting-desc">
+          When off, your password isn't saved. The extension keeps only your Monarch session,
+          and you type your password again when that session expires.
+        </div>
+      </div>
+      <label class="toggle-wrap">
+        <input type="checkbox" id="settingRememberPassword"/>
+        <span class="toggle-track">
+          <span class="toggle-thumb"></span>
+        </span>
+      </label>
+    </div>
   </div>
 
   <div class="section" style="border-top:1px solid var(--border)">
@@ -560,7 +525,7 @@
   <div class="section" style="border-top:1px solid var(--border)">
     <h2 class="section-title">Backup &amp; Restore</h2>
     <p class="section-hint">
-      Export your mappings, merge groups, and settings to a file — or restore from a previous backup.
+      Export your mappings, merge groups, and settings to a file — or restore from a previous backup. Your Monarch login, ProjectionLab key and 2FA secret are not included.
     </p>
     <div class="backup-row">
       <div class="backup-local">
@@ -568,18 +533,7 @@
         <button id="btnImportBackup" class="btn btn-sm btn-ghost">⬆ Import from File</button>
         <input type="file" id="importBackupFile" accept=".json" style="display:none"/>
       </div>
-      <div class="backup-cloud hidden" id="cloudBackupSection">
-        <span class="backup-divider">│</span>
-        <button id="btnCloudSave" class="btn btn-sm btn-primary">☁ Save to Cloud</button>
-        <span id="cloudBackupStatus" class="backup-status"></span>
-      </div>
     </div>
-    <div class="cv-name-bar hidden" id="cvNameBar">
-      <input type="text" id="cvNameInput" class="text-input cv-name-input" placeholder="Backup name"/>
-      <button id="cvNameConfirm" class="btn btn-sm btn-primary">Save</button>
-      <button id="cvNameCancel" class="btn btn-sm btn-ghost">Cancel</button>
-    </div>
-    <div class="cloud-version-list hidden" id="cloudVersionList"></div>
   </div>
 
   <div class="section" style="border-top:1px solid var(--border)">
@@ -621,7 +575,17 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="popup.js"></script>
+<script src="js/state.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/pl-data.js"></script>
+<script src="js/setup-tab.js"></script>
+<script src="js/mapping-tab.js"></script>
+<script src="js/merge-tab.js"></script>
+<script src="js/budget-merge.js"></script>
+<script src="js/budget-mapping-tab.js"></script>
+<script src="js/sync-tab.js"></script>
+<script src="js/settings-tab.js"></script>
+<script src="js/app.js"></script>
 <!-- ── Confirmation modal ──────────────────────────────────── -->
 <div id="confirmModal" class="confirm-modal hidden" role="dialog" aria-modal="true">
   <div class="confirm-modal-box">

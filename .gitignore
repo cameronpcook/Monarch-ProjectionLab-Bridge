@@ -24,7 +24,6 @@ node_modules/
 firebase-debug.log
 firestore-debug.log
 package-lock.json
-monarch-firebase/package.json
 
 # Build artifacts
 monarch-pl-bridge.zip
@@ -58,3 +57,7 @@ Thumbs.db
 # Test artifacts
 test.json
 *.log
+
+
+# Safari (generated Xcode project; regenerate with safari/build-safari.sh)
+safari/xcode/

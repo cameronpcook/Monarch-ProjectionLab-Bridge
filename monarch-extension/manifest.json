@@ -1,24 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Monarch \u2192 ProjectionLab Bridge",
-  "version": "2.0.0",
-  "description": "Sync Monarch Money account balances to ProjectionLab using the Plugin API.",
+  "version": "3.0.0",
+  "description": "Sync Monarch Money account balances and budgets to ProjectionLab. Talks to Monarch directly from your browser.",
   "permissions": [
     "storage",
     "scripting",
-    "tabs"
+    "tabs",
+    "alarms"
   ],
   "host_permissions": [
-    "http://localhost/*",
     "https://app.projectionlab.com/*",
-    "https://us-central1-monarch-bridge-prod.cloudfunctions.net/*",
-    "https://identitytoolkit.googleapis.com/*",
-    "https://securetoken.googleapis.com/*",
     "https://api.monarch.com/*"
-  ],
-  "optional_host_permissions": [
-    "http://*/*",
-    "https://*/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js"
