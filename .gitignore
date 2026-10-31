@@ -58,3 +58,6 @@ Thumbs.db
 # Test artifacts
 test.json
 *.log
+
+# Safari (generated Xcode project — regenerate with safari/build-safari.sh)
+safari/xcode/

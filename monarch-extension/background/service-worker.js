@@ -1041,20 +1041,34 @@ async function handle(msg) {
   }
 }
 
+// Chrome resolves executeScript with an array of InjectionResult objects
+// ([{ frameId, result }]). Some Safari versions have been reported to resolve
+// with the bare result value instead, so accept both shapes.
+function unwrapInjectionResult(injection) {
+  if (Array.isArray(injection)) {
+    const first = injection[0];
+    if (first && typeof first === 'object' && 'result' in first) return first.result;
+    if (injection.length === 0) return undefined;
+  }
+  return injection;
+}
+
 async function execInPL(key, fn, extraArgs = []) {
   const tabs = await chrome.tabs.query({ url: 'https://app.projectionlab.com/*' });
   if (!tabs.length) throw new Error('ProjectionLab is not open. Please open app.projectionlab.com first.');
 
   let targetTab = tabs[0];
   if (tabs.length > 1) {
-    // Sort by lastAccessed descending — use the most recently focused PL tab
-    tabs.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+    // Sort by lastAccessed descending — use the most recently focused PL tab.
+    // Safari may not populate lastAccessed, so fall back to preferring the active tab.
+    tabs.sort((a, b) =>
+      ((b.lastAccessed || 0) - (a.lastAccessed || 0)) || ((b.active ? 1 : 0) - (a.active ? 1 : 0)));
     targetTab = tabs[0];
     // Notify the popup so it can surface a warning toast
     chrome.runtime.sendMessage({ type: 'WARN_MULTI_TAB', tabTitle: targetTab.title || 'ProjectionLab' }).catch(() => {});
   }
 
-  const [{ result }] = await chrome.scripting.executeScript({
+  const injection = await chrome.scripting.executeScript({
     target: { tabId: targetTab.id },
     world:  'MAIN',
     func: (serialisedFn, key, extraArgs) => {
@@ -1069,6 +1083,7 @@ async function execInPL(key, fn, extraArgs = []) {
     },
     args: [fn.toString(), key, extraArgs],
   });
+  const result = unwrapInjectionResult(injection);
 
   if (result?.error) {
     const errMsg = result.error;
