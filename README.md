@@ -72,6 +72,12 @@ Sign in with a Monarch Bridge account and let the hosted service handle Monarch 
 
 ## Self-Hosted Setup
 
+### Mac app (easiest — no Docker)
+
+Download **Monarch Bridge Proxy** from this repo's [Releases](https://github.com/cameronpcook/Monarch-ProjectionLab-Bridge/releases) page, open it, and the proxy runs from your menu bar at `http://localhost:47821`. See [`mac-proxy-app/README.md`](mac-proxy-app/README.md) for step-by-step instructions, including the one-time "Open Anyway" approval macOS asks for.
+
+On Windows or Linux, or if you prefer Docker, use one of the options below.
+
 ### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (recommended), **or** Python 3.11+
