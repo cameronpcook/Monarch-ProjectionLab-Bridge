@@ -28,7 +28,7 @@ const S = {
   firebaseIdToken:     '',
   firebaseRefreshToken:'',
   firebaseTokenExpiry: 0,
-  settings:         { showHidden: false, writeNotes: true, monarchMfaEnabled: false, monarchMfaSecret: '', budgetSource: { mode: 'planned', lookback: 3, aggregation: 'average' } },
+  settings:         { showHidden: false, writeNotes: true, monarchMfaEnabled: false, monarchMfaSecret: '', monarchDirect: false, budgetSource: { mode: 'planned', lookback: 3, aggregation: 'average' } },
 };
 
 // ── PL investment type options ────────────────────────────────
@@ -313,7 +313,14 @@ async function save() {
 // ── Connection mode UI ───────────────────────────────────────
 function applyConnectionModeUI() {
   const hosted = S.connectionMode === 'hosted';
-  byId('monarchUrlSection').classList.toggle('hidden', hosted);
+  const direct = !hosted && !!S.settings.monarchDirect;
+  // Direct mode needs no proxy, so hide the proxy URL as in hosted mode
+  byId('monarchUrlSection').classList.toggle('hidden', hosted || direct);
+  const cbDirect = byId('settingDirectMode');
+  if (cbDirect) {
+    cbDirect.disabled = hosted;
+    byId('directModeRow').style.opacity = hosted ? '0.5' : '';
+  }
 
   // Show donate chip for self-hosted, account chip for hosted
   byId('donateChip').classList.toggle('hidden', hosted);
@@ -558,7 +565,8 @@ function setupSetup() {
 
   byId('fetchMonarchAccounts').addEventListener('click', async () => {
     S.monarchApiUrl = (byId('monarchApiUrl').value.trim() || 'http://localhost:47821').replace(/\/accounts$/, '').replace(/\/$/, '');
-    const { needed, granted } = await checkUrlPermission(S.monarchApiUrl);
+    const direct = S.connectionMode !== 'hosted' && !!S.settings.monarchDirect;
+    const { needed, granted } = direct ? { needed: false, granted: true } : await checkUrlPermission(S.monarchApiUrl);
     if (needed && !granted) {
       status('monarchFetchStatus', '✗ Permission not granted for this URL — click Grant Permission first', 'err');
       return;
@@ -4105,6 +4113,17 @@ function setupSettings() {
     }
     updateCloudSaveState();
     toast(cbHosted.checked ? 'Switched to hosted service' : 'Switched to self-hosted proxy', 'ok');
+  });
+
+  // Experimental: talk to Monarch directly (no proxy)
+  const cbDirect = byId('settingDirectMode');
+  cbDirect.checked = !!S.settings.monarchDirect;
+  cbDirect.addEventListener('change', async () => {
+    S.settings.monarchDirect = cbDirect.checked;
+    S.monarchSessionToken = '';   // token from the proxy path may not apply; log in fresh
+    await save();
+    applyConnectionModeUI();
+    toast(cbDirect.checked ? 'Direct mode on — no proxy needed' : 'Direct mode off — using your proxy', 'ok');
   });
 
   const cbHidden = byId('settingShowHidden');

@@ -128,6 +128,141 @@ async function monarchUrl(localPath) {
   return base + localPath;
 }
 
+// ---------------------------------------------------------------------------
+// Direct mode (experimental): the extension talks to Monarch's GraphQL API
+// itself, so no local proxy (Docker / Mac app) or hosted service is needed.
+// Queries mirror monarch-firebase/functions/monarch_client.py.
+// ---------------------------------------------------------------------------
+const MONARCH_GRAPHQL_URL = 'https://api.monarch.com/graphql';
+
+async function isDirectMode() {
+  if (await isHostedMode()) return false;
+  const { settings } = await chrome.storage.local.get('settings');
+  return !!settings?.monarchDirect;
+}
+
+// Hosted and direct modes both log in from the browser straight to Monarch.
+async function usesBrowserLogin() {
+  return (await isHostedMode()) || (await isDirectMode());
+}
+
+const TOKEN_EXPIRED_MSG = 'TOKEN_EXPIRED: Your Monarch session has expired. Re-authenticate.';
+
+async function monarchGraphQL(operationName, query, variables = {}) {
+  const { monarchSessionToken } = await chrome.storage.local.get('monarchSessionToken');
+  if (!monarchSessionToken) throw new Error(TOKEN_EXPIRED_MSG);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  let res;
+  try {
+    res = await fetch(MONARCH_GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Client-Platform': 'web',
+        'Authorization': `Token ${monarchSessionToken}`,
+      },
+      credentials: 'omit',
+      body: JSON.stringify({ operationName, query, variables }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Monarch API timed out after 20s');
+    throw new Error(`Could not reach Monarch directly: ${e.message}`);
+  } finally { clearTimeout(timeout); }
+  if (res.status === 401) throw new Error(TOKEN_EXPIRED_MSG);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Monarch API error ${res.status}${text ? ': ' + text.slice(0, 200) : ''}`);
+  }
+  const body = await res.json();
+  if (body.errors?.length) {
+    const msgs = body.errors.map(e => e.message || '').join('; ');
+    if (/not authenticated|not logged in|unauthori[sz]ed/i.test(msgs)) throw new Error(TOKEN_EXPIRED_MSG);
+    throw new Error(`Monarch GraphQL error: ${msgs}`);
+  }
+  return body.data || {};
+}
+
+const GQL_ACCOUNTS = `
+query GetAccounts {
+  accountTypeSummaries {
+    type { name display }
+    accounts {
+      id name displayName type { name display }
+      subtype { name display }
+      currentBalance displayBalance signedBalance isHidden isAsset
+      institution { name url logo }
+      updatedAt
+    }
+  }
+}`;
+
+const GQL_CATEGORIES = `
+query GetCategories {
+  categories {
+    id name order isSystemCategory isDisabled
+    group { id name type }
+  }
+}`;
+
+const GQL_BUDGETS = `
+query GetJointPlanningData($startDate: Date!, $endDate: Date!) {
+  budgetData(startMonth: $startDate, endMonth: $endDate) {
+    monthlyAmountsByCategory {
+      category { id name }
+      monthlyAmounts { month plannedCashFlowAmount actualAmount }
+    }
+    totalsByMonth {
+      month
+      totalIncome { plannedAmount actualAmount }
+      totalExpenses { plannedAmount actualAmount }
+    }
+  }
+}`;
+
+async function directGetAccounts() {
+  const data = await monarchGraphQL('GetAccounts', GQL_ACCOUNTS);
+  return (data.accountTypeSummaries || []).flatMap(g => g.accounts || []);
+}
+
+function localISODate(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Same shape as the proxy's /expense-budgets:
+// [{ categoryId, categoryName, groupName, monthlyAmounts }]
+async function directGetExpenseBudgets() {
+  const end = new Date();
+  const start = new Date(end.getTime() - 365 * 24 * 3600 * 1000);
+  const [catData, budgetData] = await Promise.all([
+    monarchGraphQL('GetCategories', GQL_CATEGORIES),
+    monarchGraphQL('GetJointPlanningData', GQL_BUDGETS,
+      { startDate: localISODate(start), endDate: localISODate(end) }),
+  ]);
+  const expenseCats = new Map();
+  for (const c of catData.categories || []) {
+    if ((c.group?.type || '').toLowerCase() === 'expense') {
+      expenseCats.set(c.id, { name: c.name, groupName: c.group?.name || '' });
+    }
+  }
+  const result = [];
+  for (const item of budgetData.budgetData?.monthlyAmountsByCategory || []) {
+    const cat = expenseCats.get(item.category?.id);
+    if (cat) {
+      result.push({
+        categoryId:     item.category.id,
+        categoryName:   cat.name,
+        groupName:      cat.groupName,
+        monthlyAmounts: item.monthlyAmounts || [],
+      });
+    }
+  }
+  return result;
+}
+
 async function monarchErrorMessage(res) {
   try {
     const body = await res.json();
@@ -148,6 +283,14 @@ async function handle(msg) {
   switch (msg.type) {
 
     case 'FETCH_MONARCH_ACCOUNTS': {
+      if (await isDirectMode()) {
+        const accounts = (await directGetAccounts()).map(a => ({
+          ...a,
+          name:    a.displayName    ?? a.name    ?? '',
+          balance: a.displayBalance ?? a.currentBalance ?? a.balance ?? 0,
+        }));
+        return { accounts };
+      }
       const url = await monarchUrl('/accounts');
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
@@ -171,9 +314,10 @@ async function handle(msg) {
     }
 
     case 'MONARCH_INITIATE_LOGIN': {
-      const hosted = await isHostedMode();
+      const hosted = await usesBrowserLogin();
       if (hosted) {
-        // Login directly to Monarch from the browser (REST endpoint).
+        // Login directly to Monarch from the browser (REST endpoint) —
+        // used by hosted mode and by the experimental direct mode.
         // Firebase/GCP can't reach this endpoint (Cloudflare blocks server IPs),
         // but the extension runs in the user's browser so it works fine.
         const stored = await chrome.storage.local.get(['monarchEmail', 'monarchPassword']);
@@ -258,7 +402,7 @@ async function handle(msg) {
     }
 
     case 'MONARCH_COMPLETE_MFA': {
-      const hosted2 = await isHostedMode();
+      const hosted2 = await usesBrowserLogin();
       if (hosted2) {
         // MFA: re-POST to same Monarch REST endpoint with totp code
         const stored = await chrome.storage.local.get(['monarchEmail', 'monarchPassword']);
@@ -318,6 +462,11 @@ async function handle(msg) {
     }
 
     case 'MONARCH_REFRESH_SESSION': {
+      if (await isDirectMode()) {
+        const r = await handle({ type: 'MONARCH_INITIATE_LOGIN' });
+        if (r?.requires_mfa) throw new Error('MFA code required — enable auto-MFA or use Load from Monarch');
+        return { ok: true };
+      }
       const urlR = await monarchUrl('/auth/refresh');
       const hdrs = await monarchHeaders();
       hdrs['Content-Type'] = 'application/json';
@@ -688,6 +837,7 @@ async function handle(msg) {
     }
 
     case 'FETCH_MONARCH_BUDGETS': {
+      if (await isDirectMode()) return { budgets: await directGetExpenseBudgets() };
       const url2 = await monarchUrl('/expense-budgets');
       const controller2 = new AbortController();
       const timeout2 = setTimeout(() => controller2.abort(), 10000);
