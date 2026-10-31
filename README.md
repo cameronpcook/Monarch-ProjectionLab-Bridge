@@ -111,9 +111,31 @@ Your Monarch email, password, session and ProjectionLab key are saved in the ext
 
 If your Monarch account uses an authenticator app, you can save its secret key in **Settings → Monarch Authentication**. The extension then generates the 6-digit codes itself whenever it needs to sign in again.
 
-**Security note:** this storage isn't encrypted. Anyone with access to your computer account could read it. Only save your password and 2FA secret on a computer you trust. Backup files never include them.
+**Security note:** this storage isn't encrypted. Anyone with access to your computer account could read it. Only save your password and 2FA secret on a computer you trust. Backup files never include them. To avoid saving your password, turn off **Settings → Monarch Login → Remember Monarch Password**. The extension then keeps only your Monarch session, and you type your password again when it expires.
+
+## Sync reminder
+
+If you haven't synced for a while (7 days by default), the toolbar icon shows a small badge such as "8d". Change or disable it in **Settings → Sync → Sync Reminder**. It's only a reminder: the extension never syncs or contacts Monarch on its own.
 
 ---
+
+## Development
+
+The extension itself needs no build step. To run the automated tests (Node.js 22+):
+
+```bash
+npm install
+```
+
+```bash
+npx playwright install chromium
+```
+
+```bash
+npm test
+```
+
+The tests use fake Monarch and ProjectionLab responses, so they need no accounts or network access. They also run automatically on GitHub for every push.
 
 ## Contributing
 

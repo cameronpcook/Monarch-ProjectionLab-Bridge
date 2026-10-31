@@ -59,14 +59,16 @@ async function getMfaSecretIfEnabled() {
 // ---------------------------------------------------------------------------
 // Monarch login (REST). Returns the fetch Response.
 // ---------------------------------------------------------------------------
-async function monarchLogin(totp) {
+// `password` comes from the popup when the user chose not to save it.
+async function monarchLogin(totp, password) {
   const stored = await chrome.storage.local.get(['monarchEmail', 'monarchPassword']);
-  if (!stored.monarchEmail || !stored.monarchPassword) {
+  password = password || stored.monarchPassword;
+  if (!stored.monarchEmail || !password) {
     throw new Error('Enter your Monarch email and password first');
   }
   const body = {
     username: stored.monarchEmail,
-    password: stored.monarchPassword,
+    password,
     supports_mfa: true,
     trusted_device: false,
   };
@@ -100,12 +102,12 @@ async function saveTokenFrom(res) {
 }
 
 // Log in; auto-completes MFA when a TOTP secret is saved in Settings.
-async function monarchInitiateLogin() {
-  let res = await monarchLogin();
+async function monarchInitiateLogin(password) {
+  let res = await monarchLogin(undefined, password);
   if (res.status === 403) {                 // 403 = MFA required
     const mfaSecret = await getMfaSecretIfEnabled();
     if (!mfaSecret) return { ok: true, requires_mfa: true };
-    res = await monarchLogin(await generateTOTP(mfaSecret));
+    res = await monarchLogin(await generateTOTP(mfaSecret), password);
     if (!res.ok) throw new Error(await loginErrorMessage(res, 'Auto-MFA failed'));
   } else if (!res.ok) {
     throw new Error(await loginErrorMessage(res, 'Login failed'));
@@ -235,6 +237,41 @@ async function directGetExpenseBudgets() {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Sync reminder badge. Only reads the last-sync time from storage; it never
+// contacts Monarch or ProjectionLab.
+// ---------------------------------------------------------------------------
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function updateStaleBadge() {
+  const { lastSyncAt, settings } = await chrome.storage.local.get(['lastSyncAt', 'settings']);
+  const days = settings?.staleReminderDays ?? 7;
+  let text = '';
+  if (days > 0 && lastSyncAt) {
+    const age = Math.floor((Date.now() - lastSyncAt) / DAY_MS);
+    if (age >= days) text = `${age}d`;
+  }
+  await chrome.action.setBadgeText({ text });
+  if (text) {
+    await chrome.action.setBadgeBackgroundColor({ color: '#F59E0B' });
+    await chrome.action.setTitle({ title: `Monarch → ProjectionLab Bridge — last synced ${text.slice(0, -1)} days ago` });
+  } else {
+    await chrome.action.setTitle({ title: 'Monarch → ProjectionLab Bridge' });
+  }
+}
+
+function safeUpdateBadge() { updateStaleBadge().catch(() => {}); }
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.alarms.create('stale-badge', { periodInMinutes: 60 });
+  safeUpdateBadge();
+});
+chrome.runtime.onStartup.addListener(safeUpdateBadge);
+chrome.alarms.onAlarm.addListener(a => { if (a.name === 'stale-badge') safeUpdateBadge(); });
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && (changes.lastSyncAt || changes.settings)) safeUpdateBadge();
+});
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   handle(msg).then(sendResponse).catch(e => sendResponse({ error: e.message || String(e) }));
   return true;
@@ -256,17 +293,17 @@ async function handle(msg) {
       return { budgets: await directGetExpenseBudgets() };
 
     case 'MONARCH_INITIATE_LOGIN':
-      return monarchInitiateLogin();
+      return monarchInitiateLogin(msg.password);
 
     case 'MONARCH_COMPLETE_MFA': {
-      const res = await monarchLogin(msg.code);
+      const res = await monarchLogin(msg.code, msg.password);
       if (!res.ok) throw new Error(await loginErrorMessage(res, 'MFA failed'));
       return { ok: true, token: await saveTokenFrom(res) };
     }
 
     // Get a fresh session token (uses the saved TOTP secret if MFA is on).
     case 'MONARCH_REFRESH_SESSION': {
-      const r = await monarchInitiateLogin();
+      const r = await monarchInitiateLogin(msg.password);
       if (r.requires_mfa) throw new Error('MFA code required — save your TOTP secret or use Load from Monarch');
       return { ok: true };
     }

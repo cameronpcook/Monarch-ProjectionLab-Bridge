@@ -19,7 +19,8 @@ const S = {
   monarchEmail:        '',
   monarchPassword:     '',
   monarchSessionToken: '',
-  settings:         { showHidden: false, writeNotes: true, monarchMfaEnabled: false, monarchMfaSecret: '', budgetSource: { mode: 'planned', lookback: 3, aggregation: 'average' } },
+  lastSyncAt:          0,   // ms timestamp of the last successful push to PL
+  settings:         { showHidden: false, writeNotes: true, monarchMfaEnabled: false, monarchMfaSecret: '', rememberPassword: true, staleReminderDays: 7, budgetSource: { mode: 'planned', lookback: 3, aggregation: 'average' } },
 };
 
 // ── PL investment type options ────────────────────────────────
@@ -195,7 +196,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ── Storage ──────────────────────────────────────────────────
 async function loadFromStorage() {
   const d = await msg('STORAGE_GET', {
-    keys: ['plApiKey','monarchEmail','monarchPassword','monarchSessionToken',
+    keys: ['plApiKey','monarchEmail','monarchPassword','monarchSessionToken','lastSyncAt',
            'monarchAccounts','plAccounts',
            'mappings','pendingCreations','mergeGroups','settings',
            'monarchBudgets','plExpenses','budgetMappings','budgetMergeGroups',
@@ -205,6 +206,7 @@ async function loadFromStorage() {
   if (d.monarchEmail)           S.monarchEmail           = d.monarchEmail;
   if (d.monarchPassword)        S.monarchPassword        = d.monarchPassword;
   if (d.monarchSessionToken)    S.monarchSessionToken    = d.monarchSessionToken;
+  if (d.lastSyncAt)             S.lastSyncAt             = d.lastSyncAt;
   if (d.monarchAccounts)   S.monarchAccounts   = d.monarchAccounts;
   if (d.plAccounts)        S.plAccounts        = d.plAccounts;
   if (d.mappings)          S.mappings          = d.mappings;
@@ -228,7 +230,10 @@ async function loadFromStorage() {
 
 async function save() {
   await msg('STORAGE_SET', { data: {
-    plApiKey: S.plApiKey, monarchEmail: S.monarchEmail, monarchPassword: S.monarchPassword, monarchSessionToken: S.monarchSessionToken,
+    plApiKey: S.plApiKey, monarchEmail: S.monarchEmail,
+    // Only persist the password when the user wants it remembered
+    monarchPassword: S.settings.rememberPassword === false ? '' : S.monarchPassword,
+    monarchSessionToken: S.monarchSessionToken, lastSyncAt: S.lastSyncAt,
     monarchAccounts: S.monarchAccounts, plAccounts: S.plAccounts,
     mappings: S.mappings, pendingCreations: S.pendingCreations,
     mergeGroups: S.mergeGroups, settings: S.settings,
@@ -302,7 +307,7 @@ function showCspWarning() {
         requires an extension update.
       </div>
       <div class="csp-warning-msg" style="margin-top:6px">
-        Please <a href="https://github.com" target="_blank" style="color:var(--amber)">open a GitHub issue</a>
+        Please <a href="https://github.com/cameronpcook/Monarch-ProjectionLab-Bridge/issues" target="_blank" style="color:var(--amber)">open a GitHub issue</a>
         or check for an updated version of this extension.
       </div>
     </div>
@@ -438,10 +443,12 @@ function setupSetup() {
         }
       }
       if (!S.monarchEmail || !S.monarchPassword) {
-        status('monarchFetchStatus', '✗ Enter your Monarch email and password above', 'err');
+        status('monarchFetchStatus', S.monarchEmail
+          ? '✗ Your Monarch session expired — enter your password above to sign in again'
+          : '✗ Enter your Monarch email and password above', 'err');
         return;
       }
-      const auth = await msg('MONARCH_INITIATE_LOGIN');
+      const auth = await msg('MONARCH_INITIATE_LOGIN', { password: S.monarchPassword });
       if (auth?.error) throw new Error(auth.error);
       if (auth.requires_mfa) {
         status('monarchFetchStatus', 'Check your authenticator app and enter the 6-digit code below', 'pending');
@@ -472,7 +479,7 @@ function setupSetup() {
     setLoading('verifyMfaCode', true);
     status('mfaVerifyStatus', 'Verifying…', 'loading');
     try {
-      const result = await msg('MONARCH_COMPLETE_MFA', { code });
+      const result = await msg('MONARCH_COMPLETE_MFA', { code, password: S.monarchPassword });
       if (result?.error) throw new Error(result.error);
       S.monarchSessionToken = result.token;
       await save();
@@ -3758,6 +3765,7 @@ async function runSync() {
         expenseUpdates: allExpenseUpdates.length ? allExpenseUpdates : null,
       });
       if (res?.error) throw new Error(res.error);
+      S.lastSyncAt = Date.now();   // save() below persists it; the badge updates from storage
 
       // Mark all as done
       for (const item of syncPlan) {
@@ -3878,6 +3886,23 @@ function setupSettings() {
     renderMerge();
   });
 
+  const cbRemember = byId('settingRememberPassword');
+  cbRemember.checked = S.settings.rememberPassword !== false;
+  cbRemember.addEventListener('change', async () => {
+    S.settings.rememberPassword = cbRemember.checked;
+    await save();   // when off, this clears the saved password
+    toast(cbRemember.checked ? 'Password will be remembered' : 'Saved password removed', 'ok');
+  });
+
+  const staleEl = byId('settingStaleDays');
+  staleEl.value = S.settings.staleReminderDays ?? 7;
+  staleEl.addEventListener('change', async () => {
+    const n = Math.max(0, Math.min(365, parseInt(staleEl.value, 10) || 0));
+    staleEl.value = n;
+    S.settings.staleReminderDays = n;
+    await save();
+  });
+
   const cbNotes = byId('settingWriteNotes');
   cbNotes.checked = S.settings.writeNotes !== false; // default true
   cbNotes.addEventListener('change', async () => {
@@ -3921,7 +3946,8 @@ function setupSettings() {
     statusEl.style.color = 'var(--txt3)';
     statusEl.textContent = 'Refreshing…';
     try {
-      await msg('MONARCH_REFRESH_SESSION');
+      const r = await msg('MONARCH_REFRESH_SESSION', { password: S.monarchPassword });
+      if (r?.error) throw new Error(r.error);
       statusEl.style.color = 'var(--green)';
       statusEl.textContent = 'Session refreshed';
     } catch (e) {

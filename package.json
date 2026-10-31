@@ -1,0 +1,12 @@
+{
+  "name": "monarch-projectionlab-bridge",
+  "private": true,
+  "description": "Development tooling (tests) for the Monarch → ProjectionLab Bridge extension. Not needed to use the extension.",
+  "scripts": {
+    "test": "node --test tests/service-worker.test.js tests/popup.test.js",
+    "test:background": "node --test tests/service-worker.test.js"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

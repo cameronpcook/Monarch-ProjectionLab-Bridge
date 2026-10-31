@@ -41,6 +41,7 @@ These are the places where Safari is most likely to behave differently. Test eac
 |---|---|---|
 | Sync to ProjectionLab | Preview and push a sync | Needs `world: "MAIN"` injection, plus `new Function()` running under ProjectionLab's page CSP |
 | Monarch sign-in | Load from Monarch, including a 2FA code if you use one | Login and data requests go straight to `api.monarch.com` from the extension |
+| Sync reminder badge | After a sync, set Settings → Sync Reminder to 1 day and check the toolbar icon the next day | Uses `chrome.alarms` and the toolbar badge; Safari support for both is unverified |
 | Multiple ProjectionLab tabs | Open two tabs and sync | Safari may not provide `tab.lastAccessed`. The code now falls back to the active tab. |
 | Popup layout | Open the popup | The popup is 780px wide, and Safari may constrain popover size |
 | Background worker | Leave Safari idle and come back, then sync | Safari may suspend the background service worker more aggressively than Chrome |

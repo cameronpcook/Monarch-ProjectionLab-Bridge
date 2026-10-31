@@ -460,6 +460,39 @@
       </label>
     </div>
 
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label">Sync Reminder</div>
+        <div class="setting-desc">
+          Show a badge on the toolbar icon (for example "8d") when you haven't synced for this many days.
+          It's only a reminder: the extension never syncs or contacts Monarch on its own. Set to 0 to turn it off.
+        </div>
+      </div>
+      <div class="bsb-inline">
+        <input id="settingStaleDays" type="number" class="text-input bsb-num" min="0" max="365"/>
+        <span class="bsb-unit">days</span>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="section" style="border-top:1px solid var(--border)">
+    <h2 class="section-title">Monarch Login</h2>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label">Remember Monarch Password</div>
+        <div class="setting-desc">
+          When off, your password isn't saved. The extension keeps only your Monarch session,
+          and you type your password again when that session expires.
+        </div>
+      </div>
+      <label class="toggle-wrap">
+        <input type="checkbox" id="settingRememberPassword"/>
+        <span class="toggle-track">
+          <span class="toggle-thumb"></span>
+        </span>
+      </label>
+    </div>
   </div>
 
   <div class="section" style="border-top:1px solid var(--border)">
